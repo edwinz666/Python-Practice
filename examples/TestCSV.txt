@@ -1,0 +1,3 @@
+column1, column2,column3
+I don't know what to say except that, this is a test CSV document for Python Practice,
+,blahblah,
