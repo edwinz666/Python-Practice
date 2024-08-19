@@ -1655,3 +1655,4 @@ def retrieve_parse_and_print_doc(docURL):
 
 retrieve_parse_and_print_doc('https://docs.google.com/document/d/e/2PACX-1vRMx5YQlZNa3ra8dYYxmv-QIQ3YJe8tbI3kqcuC7lQiZm-CSEznKfN_HYNSpoXcZIV3Y_O3YoUB1ecq/pub')
 # %%
+np.arange(100)
