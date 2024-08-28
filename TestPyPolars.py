@@ -1568,8 +1568,11 @@ print(test_df2.select(pl.col("blah").cast(pl.Categorical("lexical")).sort()))
 
 sort_cats = test_df2["blah"].cat.get_categories().sort().to_list()
 sort_cats
+sort_cats = ['dd','c','b']
 # .cat.set_ordering("lexical") ??? where is the option
-test_df2.select(pl.col("blah").cast(pl.Enum(sort_cats))).sort("blah")
+test_df3 = test_df2.select(pl.col("blah").cast(pl.Enum(sort_cats))).sort("blah")
+test_df3["blah"].unique().cast(pl.String).sort().to_list()
+test_df2["blah"].unique().sort().to_list()
 
 myorder = ['c','b','dd']
 
@@ -1581,3 +1584,4 @@ with pl.StringCache():
 print(test_df2.cast(pl.String).cast(pl.Categorical).sort("blah"))
 
 test_df2["blah"].cat.uses_lexical_ordering()
+# %%
