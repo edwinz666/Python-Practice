@@ -866,4 +866,40 @@ def pairs(
     
 iris = sns.load_dataset('iris')
 pairs(pl.DataFrame(iris), x_vars, x_vars, sharex=False, sharey=False, figsize=(8,8))
+
+test_sql = pl.DataFrame([pl.Series("some_name", [1,4,5,1]), pl.Series("some_name2", [2,6,1,7])])
+test_sql["some_name"].qcut(2)
+test_sql.write_database()
+# %%    ### Fix for -inf/inf categories from qcut/cut function in polars ###
+
+def fix_cut(data: pl.DataFrame, colnames, col_mins, col_maxs):
+    exprs = []
+    
+    ### For each column, replace -infs/infs with the supplied column mins/maxs
+    ### Also converts the column to an Enum
+    for col, col_min, col_max in zip(colnames, col_mins, col_maxs):
+        min_format = "[{}".format(col_min)
+        max_format = "{}]".format(col_max)
+        
+        enum_list = (
+            data[col]
+            .unique().cast(pl.String).str.replace_many(
+            ["(-inf",   "[-inf",     "inf)",     "inf]" ], 
+            [min_format, min_format, max_format, max_format])
+            .to_list()
+        )
+
+        exprs.append(
+            pl.col(col).cast(pl.String)
+            .str.replace_many(
+                ["(-inf",   "[-inf",     "inf)",     "inf]" ], 
+                [min_format, min_format, max_format, max_format])
+            .cast(pl.Enum(enum_list))
+        )
+        
+    return data.with_columns(exprs)
+
+
+fix_cut(test_sql.select(pl.col("some_name").qcut(2), pl.col("some_name2").qcut(3)), 
+        ["some_name", "some_name2"], [1, 1], [5, 7]).dtypes
 # %%
