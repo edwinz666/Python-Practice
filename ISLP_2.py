@@ -651,7 +651,10 @@ for i in range(len(x_vars)):
         
         ax = g.axes[j,i]
         
-        sns.scatterplot(iris, x=x, y=y, ax=ax)
+        if x == "species":
+            sns.boxplot(iris, x=x, y=y, ax=ax)
+        else:
+            sns.scatterplot(iris, x=x, y=y, ax=ax)
 
 # %%  ### MULTIPLE GRAPHS ON ONE PLOT, CUSTOM DATA AGGREGATIONS
 sns.catplot(data=tips, kind="count", x="smoker", hue="day",order=["No", "Yes"])
@@ -682,8 +685,8 @@ plt.title("SUB TITLE",fontsize=6,color='red')
 plt.show()
 
 # %%
-
-
+titanic = sns.load_dataset("titanic")
+sns.swarmplot(titanic, x="class",y="sex")
 
 
 
@@ -759,15 +762,108 @@ college.schema
 ### c)
 college.describe()
 ### d)
-first_cols = ["Top10perc", "Apps", "Enroll"]
+first_cols = ["Top10perc", "Apps"]
 college.select(first_cols)
-sns.pairplot(college.select(first_cols).to_pandas())
-g = sns.PairGrid(college.select(first_cols))
+# sns.pairplot(college.select(first_cols).to_pandas())
+g = sns.PairGrid(college.select(first_cols).filter(pl.col("Apps")<40000), x_vars=first_cols, y_vars=first_cols)
+
 g.map_lower(sns.scatterplot)
-g.map_upper(sns.kdeplot)
+# g.map_upper(sns.kdeplot)
 g.map_diag(sns.histplot)
+g.axes[0,0].set_xlim(0, 50)
+g.axes[0,0].set_ylim(0, 0.04)
+
+
 sns.histplot(college["Top10perc"], kde=True)
 
 test1 = college["Top10perc"].value_counts()
 sns.barplot(test1, x="Top10perc", y="count")
-sns.countplot(college, x="Top10perc")
+# %%
+fig, ax = plt.subplots(3, 3)
+sns.histplot(college, x="Top10perc",ax=ax[0,0])
+# %%
+x_vars = ["sepal_width","species"]
+y_vars = ["petal_length","petal_width"]
+# sns.countplot(pl.DataFrame(iris), x="species")
+# pl.DataFrame(iris)["species"].value_counts()
+
+def pairs(
+    data: pl.DataFrame,
+    x_vars, y_vars, hue=None,
+    numerical_numerical_1 = sns.scatterplot,
+    numerical_numerical_2 = sns.histplot,
+    discrete_numerical_1 = sns.boxplot,
+    discrete_numerical_2 = sns.violinplot,
+    discrete_discrete_1 = sns.histplot,
+    discrete_discrete_2 = None,
+    diag_numerical = sns.histplot,
+    diag_discrete = sns.countplot,
+    
+    numerical_numerical_1_kwargs = {},
+    numerical_numerical_2_kwargs = {},
+    discrete_numerical_1_kwargs = {},
+    discrete_numerical_2_kwargs = {},
+    discrete_discrete_1_kwargs = {},
+    discrete_discrete_2_kwargs = {},
+    diag_numerical_kwargs = {},
+    diag_discrete_kwargs = {},
+    
+    **subplots_kwargs
+    ):
+    
+    # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, 
+    #              **kwargs)
+    _, g = plt.subplots(len(y_vars),len(x_vars), **subplots_kwargs)
+
+    # for ax in g.axes.flatten():
+    for i in range(len(x_vars)):
+        for j in range(len(y_vars)):
+            x = x_vars[i]
+            y = y_vars[j]
+            ax = g[j,i]
+            x_dtype = data.dtypes[data.get_column_index(x)]
+            y_dtype = data.dtypes[data.get_column_index(y)]
+            
+            if x_dtype in [pl.Categorical, pl.Enum, pl.String]:
+                x_dtype = "discrete"
+            else:
+                x_dtype = "numerical"
+            if y_dtype in [pl.Categorical, pl.Enum, pl.String]:
+                y_dtype = "discrete"
+            else:
+                y_dtype = "numerical"
+            
+            # diagonal
+            # changed from if i == j?
+            if x == y:
+                y = None
+                if x_dtype == "discrete":        
+                    func, func_kwargs = (diag_discrete, diag_discrete_kwargs)
+                else:
+                    func, func_kwargs = (diag_numerical, diag_numerical_kwargs)
+            # lower triangle
+            elif i < j:
+                if x_dtype == "discrete" and y_dtype == "discrete":
+                    func, func_kwargs = (discrete_discrete_1, discrete_discrete_1_kwargs)
+                if x_dtype == "numerical" and y_dtype == "numerical":
+                    func, func_kwargs = (numerical_numerical_1, numerical_numerical_1_kwargs)
+                else:
+                    func, func_kwargs = (discrete_numerical_1, discrete_numerical_1_kwargs)
+            # upper triangle
+            else:
+                if x_dtype == "discrete" and y_dtype == "discrete":
+                    func, func_kwargs = (discrete_discrete_2, discrete_discrete_2_kwargs)
+                if x_dtype == "numerical" and y_dtype == "numerical":
+                    func, func_kwargs = (numerical_numerical_2, numerical_numerical_2_kwargs)
+                else:
+                    func, func_kwargs = (discrete_numerical_2, discrete_numerical_2_kwargs)
+            # upper triangle
+            
+            # draw the graph on the axis
+            func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
+            
+    return g
+    
+iris = sns.load_dataset('iris')
+pairs(pl.DataFrame(iris), x_vars, x_vars, sharex=False, sharey=False, figsize=(8,8))
+# %%
