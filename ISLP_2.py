@@ -1,5 +1,6 @@
 # %%
 # Library imports
+from funcs import *
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,6 +8,8 @@ import matplotlib.ticker as mtick
 import seaborn as sns
 import statsmodels as sm
 import pyarrow as pa
+pa.__file__
+pa.__version__
 
 import polars as pl
 import polars.selectors as cs
@@ -787,119 +790,98 @@ y_vars = ["petal_length","petal_width"]
 # sns.countplot(pl.DataFrame(iris), x="species")
 # pl.DataFrame(iris)["species"].value_counts()
 
-def pairs(
-    data: pl.DataFrame,
-    x_vars, y_vars, hue=None,
-    numerical_numerical_1 = sns.scatterplot,
-    numerical_numerical_2 = sns.histplot,
-    discrete_numerical_1 = sns.boxplot,
-    discrete_numerical_2 = sns.violinplot,
-    discrete_discrete_1 = sns.histplot,
-    discrete_discrete_2 = None,
-    diag_numerical = sns.histplot,
-    diag_discrete = sns.countplot,
-    
-    numerical_numerical_1_kwargs = {},
-    numerical_numerical_2_kwargs = {},
-    discrete_numerical_1_kwargs = {},
-    discrete_numerical_2_kwargs = {},
-    discrete_discrete_1_kwargs = {},
-    discrete_discrete_2_kwargs = {},
-    diag_numerical_kwargs = {},
-    diag_discrete_kwargs = {},
-    
-    **subplots_kwargs
-    ):
-    
-    # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, 
-    #              **kwargs)
-    _, g = plt.subplots(len(y_vars),len(x_vars), **subplots_kwargs)
 
-    # for ax in g.axes.flatten():
-    for i in range(len(x_vars)):
-        for j in range(len(y_vars)):
-            x = x_vars[i]
-            y = y_vars[j]
-            ax = g[j,i]
-            x_dtype = data.dtypes[data.get_column_index(x)]
-            y_dtype = data.dtypes[data.get_column_index(y)]
-            
-            if x_dtype in [pl.Categorical, pl.Enum, pl.String]:
-                x_dtype = "discrete"
-            else:
-                x_dtype = "numerical"
-            if y_dtype in [pl.Categorical, pl.Enum, pl.String]:
-                y_dtype = "discrete"
-            else:
-                y_dtype = "numerical"
-            
-            # diagonal
-            # changed from if i == j?
-            if x == y:
-                y = None
-                if x_dtype == "discrete":        
-                    func, func_kwargs = (diag_discrete, diag_discrete_kwargs)
-                else:
-                    func, func_kwargs = (diag_numerical, diag_numerical_kwargs)
-            # lower triangle
-            elif i < j:
-                if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = (discrete_discrete_1, discrete_discrete_1_kwargs)
-                if x_dtype == "numerical" and y_dtype == "numerical":
-                    func, func_kwargs = (numerical_numerical_1, numerical_numerical_1_kwargs)
-                else:
-                    func, func_kwargs = (discrete_numerical_1, discrete_numerical_1_kwargs)
-            # upper triangle
-            else:
-                if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = (discrete_discrete_2, discrete_discrete_2_kwargs)
-                if x_dtype == "numerical" and y_dtype == "numerical":
-                    func, func_kwargs = (numerical_numerical_2, numerical_numerical_2_kwargs)
-                else:
-                    func, func_kwargs = (discrete_numerical_2, discrete_numerical_2_kwargs)
-            # upper triangle
-            
-            # draw the graph on the axis
-            func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
-            
-    return g
     
 iris = sns.load_dataset('iris')
 pairs(pl.DataFrame(iris), x_vars, x_vars, sharex=False, sharey=False, figsize=(8,8))
 
+# %%
+# from sqlalchemy import URL
+import sqlalchemy as sa
+# string --> dialect+driver://username:password@host:port/database
+
+from sqlalchemy.engine import URL
+
+url_object = URL.create(
+    "mssql+pyodbc",
+    # next two arguments created using:::
+    # USE PythonTests;
+    # CREATE LOGIN YourUsername WITH PASSWORD = 'YourPassword';
+    # CREATE USER YourUsername FOR LOGIN YourUsername;
+    username="YourUsername",
+    password="YourPassword",  # plain (unescaped) text
+    host="EZ",
+    port=None,
+    database="PythonTests",
+    query={
+        "driver": "ODBC Driver 17 for SQL Server",
+        "LongAsMax": "Yes",
+        "trusted_connection": "yes",
+        # "TrustServerCertificate": "yes",
+        # "authentication": "ActiveDirectoryIntegrated",
+    }
+)
+url_object.render_as_string(hide_password=False)
+url_object.render_as_string(hide_password=True)
+url = "mssql+pyodbc://EZ/PythonTests?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+url
+
 test_sql = pl.DataFrame([pl.Series("some_name", [1,4,5,1]), pl.Series("some_name2", [2,6,1,7])])
-test_sql["some_name"].qcut(2)
-test_sql.write_database()
-# %%    ### Fix for -inf/inf categories from qcut/cut function in polars ###
+# test_sql["some_name"].qcut(2)
+# test_sql.write_database("test_sql", url_object.render_as_string(hide_password=False), if_table_exists="append")
+# test_sql.write_database(table_name="test_sql", connection=url, if_table_exists="append")
 
-def fix_cut(data: pl.DataFrame, colnames, col_mins, col_maxs):
-    exprs = []
-    
-    ### For each column, replace -infs/infs with the supplied column mins/maxs
-    ### Also converts the column to an Enum
-    for col, col_min, col_max in zip(colnames, col_mins, col_maxs):
-        min_format = "[{}".format(col_min)
-        max_format = "{}]".format(col_max)
-        
-        enum_list = (
-            data[col]
-            .unique().cast(pl.String).str.replace_many(
-            ["(-inf",   "[-inf",     "inf)",     "inf]" ], 
-            [min_format, min_format, max_format, max_format])
-            .to_list()
-        )
+engine = sa.create_engine(url)
+pl.read_database("SELECT * from test_sql", engine)
 
-        exprs.append(
-            pl.col(col).cast(pl.String)
-            .str.replace_many(
-                ["(-inf",   "[-inf",     "inf)",     "inf]" ], 
-                [min_format, min_format, max_format, max_format])
-            .cast(pl.Enum(enum_list))
-        )
-        
-    return data.with_columns(exprs)
+url2 = r"mssql://EZ/PythonTests?driver=SQL+Server&trusted_connection=yes&encrypt=true"
+url2t = r"mssql://EZ/PythonTests?driver=SQL+Server&trusted_connection=true&encrypt=true"
+url3 = f'mssql://YourUsername:YourPassword@EZ/PythonTests?driver=SQL+Server&trusted_connection=yes'
+url3t = f'mssql://YourUsername:YourPassword@EZ/PythonTests?driver=SQL+Server&trusted_connection=true'
+url4 = r"mssql://EZ/PythonTests?encrypt=true&trusted_connection=true"
 
+# this is timing out at the moment, 
+# read_database_uri relies on connectorx so also times out
+import connectorx as cx
+cx.read_sql(url, 
+            "SELECT * FROM test_sql")
 
-fix_cut(test_sql.select(pl.col("some_name").qcut(2), pl.col("some_name2").qcut(3)), 
-        ["some_name", "some_name2"], [1, 1], [5, 7]).dtypes
+pl.read_database_uri(query="SELECT * from test_sql", uri=url, 
+                    #  partition_num=3
+                     )
+
+# %%
+
+from sqlalchemy.orm import Session
+session = Session(engine)
+
+from sqlalchemy import text
+with engine.connect() as connection:
+    result = connection.execute(text("select * from test_sql"))
+    for row in result:
+        print(row)
+
+from sqlalchemy import select
+# 1. the select query
+sele = select(test_sql).order_by(test_sql.some_name.desc()).limit(3)
+print(sele)
+
+# 2. create a STRING statement from it
+stmt = str(sele.compile(
+    dialect=session.bind.dialect,
+    compile_kwargs={"literal_binds": True},
+))
+print(stmt)
+
+# 3. this is the ACTUAL ANSWER part
+import polars as pl
+res = pl.read_database(stmt, session)
+print(res)
+
+# %%
+
+# %%
+
+# %%
+
 # %%

@@ -1218,7 +1218,7 @@ def train_test_split_lazy(
     # df_test = df.filter(pl.col("index") >= pl.len() * train_fraction)
 
     # this is better and faster than above
-    df_height = df_big.select(pl.len()).collect().item()
+    df_height = df.select(pl.len()).collect().item()
     train_num = round(df_height * train_fraction)
     test_num = df_height - train_num
     df_train = df.head( train_num )
