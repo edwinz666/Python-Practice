@@ -8,8 +8,6 @@ import matplotlib.ticker as mtick
 import seaborn as sns
 import statsmodels as sm
 import pyarrow as pa
-pa.__file__
-pa.__version__
 
 import polars as pl
 import polars.selectors as cs
@@ -91,152 +89,7 @@ w_latitude = pn.widgets.DiscreteSlider(
 w_latitude
 
 # %%
-def var_overview(data, filename):
-    with xlsxwriter.Workbook(filename) as wb:  
-        # create format for percent-formatted columns
-        perc_format = wb.add_format({'num_format': '#,##0.00%'})  
-        
-        for col in data.columns:
-            # create the worksheet for the variable
-            ws = wb.add_worksheet(col)
-            
-            # 1. { ... }
-            temp = (
-                data.group_by(col).agg(
-                    pl.len().alias("count"),
-                    (pl.len() / data.height).alias("count_perc"),
-                # pl.sum("Exposure").alias("Total_Exposure"),
-                # pl.sum("ClaimNb").alias("Total_ClaimNb"),
-                # )
-                # .with_columns(
-                #     (pl.col("Total_ClaimNb") / pl.col("Total_Exposure")).alias("Claim_Freq"),
-                #     (pl.sum("Total_ClaimNb") / pl.sum("Total_Exposure")).alias("average_freq")
-                ).sort(col)
-            )
-            # print(temp)
-            
-            # output this section only if lower than 100,000 categories
-            max_height_1 = 100_000
-            if temp.height <= max_height_1:
-                temp.write_excel(
-                    workbook=wb, 
-                    worksheet=col,
-                    position="A1",
-                    table_name=col,
-                    table_style="Table Style Medium 26",
-                    hide_gridlines=True,
-                    column_formats={'count_perc': '0.00%'
-                                    # , 'Claim_Freq': '0.00%'
-                                    # , 'Total_Exposure': '#,##0'
-                                    },
-                    autofit=True
-                )
-                
-                
-            # 2. { ... }
-            summary = data.select(pl.col(col)).to_series().describe()
-            additional = temp.select(
-                pl.col(col).len().alias("distinct_count")
-                ).unpivot(variable_name="statistic", value_name="value")
-            
-            summary.write_excel(
-                workbook=wb, 
-                worksheet=col,
-                position=(0, temp.width + 1),
-                table_name=col + "_summary",
-                table_style="Table Style Medium 26",
-                hide_gridlines=True,
-                autofit=True
-            )
-            
-            additional.write_excel(
-                workbook=wb, 
-                worksheet=col,
-                position=(summary.height + 2, temp.width + 1),
-                table_name=col + "_additional",
-                table_style="Table Style Medium 26",
-                hide_gridlines=True,
-            )  
 
-            # 3. { ... }
-            # don't provide graphs for variables with a high # of categories
-            max_height_2 = 1000
-            if temp.height > max_height_2:
-                continue
-            
-            # don't include data labels in graph if exceeding 10 unique values
-            max_height_3 = 10
-            data_labels = temp.height <= max_height_3
-            
-            # Row count chart
-            chart = wb.add_chart({"type": "column"})
-            chart.set_title({"name": col})
-            chart.set_legend({"none": True})
-            chart.set_style(38)
-            chart.add_series(
-                {  # note the use of structured references
-                    "values": "={}[{}]".format(col, "count"),
-                    "categories": "={}[{}]".format(col, col),
-                    "data_labels": {"value": data_labels},
-                }
-            )
-            
-            # add chart to the worksheet
-            ws.insert_chart(0, temp.width + 1 + summary.width + 1, chart)
-        
-            # # Exposure and Freq chart
-            # column_chart = wb.add_chart({"type": "column"})
-            # column_chart.set_title({"name": col})
-            # column_chart.set_legend({"none": False, "position": "bottom"})
-            # column_chart.set_style(38)
-            # column_chart.add_series(
-            #     {  # note the use of structured reference
-            #         "name": "Total_Exposure",
-            #         "values": "={}[{}]".format(col, "Total_Exposure"),
-            #         "categories": "={}[{}]".format(col, col),
-            #         "data_labels": {"value": False},
-            #     }
-            # )
-
-            # # Create a new line chart. This will use this as the secondary chart.
-            # line_chart = wb.add_chart({"type": "line"})
-
-            # # Configure the data series for the secondary chart. We also set a
-            # # secondary Y axis via (y2_axis).
-            # line_chart.add_series(
-            #     {
-            #         "name": "Claim Frequency",
-            #         "values": "={}[{}]".format(col, "Claim_Freq"),
-            #         "categories": "={}[{}]".format(col, col),
-            #         "y2_axis": True,
-            #         "line": {'width': 3, 'color': '#770737'}
-            #     }
-            # )
-            
-            # line_chart.add_series(
-            #     {
-            #         "name": "Average Claim Frequency",
-            #         "values": "={}[{}]".format(col, "average_freq"),
-            #         "categories": "={}[{}]".format(col, col),
-            #         "y2_axis": True,
-            #         "line": {'width': 1.5, 'dash_type': 'dash'}
-            #     }
-            # )
-
-            # # Combine the charts.
-            # column_chart.combine(line_chart)
-
-            # # Add a chart title and some axis labels.
-            # column_chart.set_title({"name": "Exposure and Claim Frequency"})
-            # column_chart.set_x_axis({"name": col})
-            # column_chart.set_y_axis({"name": "Exposure"})
-
-            # # Note: the y2 properties are on the secondary chart.
-            # line_chart.set_y2_axis({"name": "Claim Frequency"})
-            
-            # ws.insert_chart(18, temp.width + 1 + summary.width + 1, column_chart, 
-            #                 options={'x_scale': 1.5, 'y_scale': 1.5}
-            # )
 # %%
 college = pl.scan_csv("data/college.csv").collect()
 college
@@ -691,51 +544,7 @@ plt.show()
 titanic = sns.load_dataset("titanic")
 sns.swarmplot(titanic, x="class",y="sex")
 
-
-
-
-
-
-
-
-
-# %%    ###### CONVERT TO ENUM FUNCTION ########
-
-# Converts selected columns of a dataframe to an ordered enum type
-def to_ordered_enum(
-    data: pl.DataFrame, 
-    colnames: list[str],
-    ):
-    
-    # initialise list of expressions to cast 'data' to
-    exprs = []
-    
-    for col in colnames:
-        dtype = data.dtypes[data.get_column_index(col)]
-        
-        # generate list for the Enum type to cast to
-        if dtype.is_(pl.Categorical):
-            sorted_values = data[col].unique().cat.get_categories().sort()
-        elif dtype.is_(pl.Enum):
-            sorted_values = data[col].unique().cast(pl.String).sort()
-        elif dtype.is_numeric():
-            max_digits = len(str(data[col].max()))
-            sorted_values = data[col].unique().sort().cast(pl.String).str.zfill(max_digits) 
-        else:
-            sorted_values = data[col].unique().sort()
-
-        
-        # append an expression to list depending on if it is a numeric type
-        if dtype.is_numeric():
-            exprs.append(pl.col(col).cast(pl.String).str.zfill(max_digits).cast(pl.Enum(sorted_values)))
-        else:
-            exprs.append(pl.col(col).cast(pl.Enum(sorted_values)))
-
-    # change data types of 'data' to Enum for the list of expressions provided
-    data = data.with_columns(*exprs)
-    
-    return data
-
+# %%
 
 sort_cats = pl.DataFrame(
     [pl.Series("blah",["1","15","152"]),
@@ -776,11 +585,25 @@ g.map_diag(sns.histplot)
 g.axes[0,0].set_xlim(0, 50)
 g.axes[0,0].set_ylim(0, 0.04)
 
+plt.show()
+plt.close()
 
 sns.histplot(college["Top10perc"], kde=True)
+plt.show()
+plt.close()
 
 test1 = college["Top10perc"].value_counts()
 sns.barplot(test1, x="Top10perc", y="count")
+plt.show()
+plt.close()
+
+from funcs import *
+x_vars = ["Top10perc", "Apps", "Private"]
+g = pairs(college, x_vars = x_vars, y_vars = x_vars, hue="Private", 
+      figsize=(16, 16))
+
+sns.histplot(data=college,x="Top10perc", y="Apps", bins=20)
+plt.show()
 # %%
 fig, ax = plt.subplots(3, 3)
 sns.histplot(college, x="Top10perc",ax=ax[0,0])
@@ -790,98 +613,54 @@ y_vars = ["petal_length","petal_width"]
 # sns.countplot(pl.DataFrame(iris), x="species")
 # pl.DataFrame(iris)["species"].value_counts()
 
-
-    
 iris = sns.load_dataset('iris')
 pairs(pl.DataFrame(iris), x_vars, x_vars, sharex=False, sharey=False, figsize=(8,8))
 
 # %%
-# from sqlalchemy import URL
-import sqlalchemy as sa
-# string --> dialect+driver://username:password@host:port/database
+customer_list = ['ABC', '123']
 
-from sqlalchemy.engine import URL
+# parameterized query placeholders
+placeholders = ",".join("?" * len(customer_list))
 
-url_object = URL.create(
-    "mssql+pyodbc",
-    # next two arguments created using:::
-    # USE PythonTests;
-    # CREATE LOGIN YourUsername WITH PASSWORD = 'YourPassword';
-    # CREATE USER YourUsername FOR LOGIN YourUsername;
-    username="YourUsername",
-    password="YourPassword",  # plain (unescaped) text
-    host="EZ",
-    port=None,
-    database="PythonTests",
-    query={
-        "driver": "ODBC Driver 17 for SQL Server",
-        "LongAsMax": "Yes",
-        "trusted_connection": "yes",
-        # "TrustServerCertificate": "yes",
-        # "authentication": "ActiveDirectoryIntegrated",
-    }
-)
-url_object.render_as_string(hide_password=False)
-url_object.render_as_string(hide_password=True)
-url = "mssql+pyodbc://EZ/PythonTests?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
-url
+# query table
+query = """
+SELECT
+[ID],
+[Customer]
+FROM xyz.dbo.abc
+WHERE [Customer] IN (%s)
+""" % placeholders
 
-test_sql = pl.DataFrame([pl.Series("some_name", [1,4,5,1]), pl.Series("some_name2", [2,6,1,7])])
-# test_sql["some_name"].qcut(2)
-# test_sql.write_database("test_sql", url_object.render_as_string(hide_password=False), if_table_exists="append")
-# test_sql.write_database(table_name="test_sql", connection=url, if_table_exists="append")
-
-engine = sa.create_engine(url)
-pl.read_database("SELECT * from test_sql", engine)
-
-url2 = r"mssql://EZ/PythonTests?driver=SQL+Server&trusted_connection=yes&encrypt=true"
-url2t = r"mssql://EZ/PythonTests?driver=SQL+Server&trusted_connection=true&encrypt=true"
-url3 = f'mssql://YourUsername:YourPassword@EZ/PythonTests?driver=SQL+Server&trusted_connection=yes'
-url3t = f'mssql://YourUsername:YourPassword@EZ/PythonTests?driver=SQL+Server&trusted_connection=true'
-url4 = r"mssql://EZ/PythonTests?encrypt=true&trusted_connection=true"
-
-# this is timing out at the moment, 
-# read_database_uri relies on connectorx so also times out
-import connectorx as cx
-cx.read_sql(url, 
-            "SELECT * FROM test_sql")
-
-pl.read_database_uri(query="SELECT * from test_sql", uri=url, 
-                    #  partition_num=3
-                     )
-
+print(query)
 # %%
-
-from sqlalchemy.orm import Session
-session = Session(engine)
-
-from sqlalchemy import text
-with engine.connect() as connection:
-    result = connection.execute(text("select * from test_sql"))
-    for row in result:
-        print(row)
-
-from sqlalchemy import select
-# 1. the select query
-sele = select(test_sql).order_by(test_sql.some_name.desc()).limit(3)
-print(sele)
-
-# 2. create a STRING statement from it
-stmt = str(sele.compile(
-    dialect=session.bind.dialect,
-    compile_kwargs={"literal_binds": True},
-))
-print(stmt)
-
-# 3. this is the ACTUAL ANSWER part
-import polars as pl
-res = pl.read_database(stmt, session)
-print(res)
-
+data = sns.load_dataset("titanic")
+sns.catplot(data=data, x="class", hue="sex", kind="count")
+plt.show()
 # %%
+data = sns.load_dataset("titanic")
+pivot_table = pd.crosstab(data['class'], data['sex'])
+pivot_table
+sns.heatmap(pivot_table, annot=True, fmt="d")
+plt.show()
+sns.heatmap()
+data = pl.DataFrame(sns.load_dataset("titanic"))
+data.schema
+pivotted = data.group_by('class','sex').len().pivot(on="sex", index="class")
+pivotted
+sns.heatmap(pivotted.to_pandas().set_index("class"), annot=True, fmt="d")
+pivotted = data.group_by('class','sex').len().pivot(on="class", index="sex")
+pivotted
+sns.heatmap(pivotted.to_pandas().set_index("sex"), annot=True, fmt="d")
+my_vars = ["class","sex", "fare"]
+pairs(data, x_vars=my_vars, y_vars=my_vars, hue="deck",figsize=(18,18))
+pairs(data, x_vars=["fare"], y_vars=["sex","class"], hue="deck")
+pairs(data.filter(pl.col("class").is_in(["Second","Third"])), 
+      x_vars=["fare"], y_vars=["sex","class"], hue="deck",
+      figsize=(12,12))
 
-# %%
 
-# %%
-
+test_plt = plt.subplots(2,1)
+test_plt[1].ndim
+test_plt2 = plt.subplots(2,2)
+test_plt2[1].ndim
 # %%

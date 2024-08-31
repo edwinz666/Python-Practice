@@ -31,29 +31,42 @@ ax1 = sns.set_style(style=None, rc=None )
 # sns.set_context()
 # sns.despine()
 
-
 # %%
 def pairs(
+    # dataset
     data: pl.DataFrame,
-    x_vars, y_vars, hue=None,
-    numerical_numerical_1 = sns.scatterplot,
+    # variable names
+    x_vars: list[str], y_vars: list[str], hue: str = None,
+    
+    # define visualization based on variable types and pairs
+    # also define a 2nd visualization for square grids
+    numerical_numerical_1 = sns.regplot,
     numerical_numerical_2 = sns.histplot,
     discrete_numerical_1 = sns.boxplot,
     discrete_numerical_2 = sns.violinplot,
     discrete_discrete_1 = sns.histplot,
-    discrete_discrete_2 = None,
+    discrete_discrete_2 = sns.heatmap,
     diag_numerical = sns.histplot,
     diag_discrete = sns.countplot,
     
-    numerical_numerical_1_kwargs = {},
-    numerical_numerical_2_kwargs = {},
+    # kwargs for each seaborn visualization defined
+    numerical_numerical_1_kwargs = {
+        "ci": None, "line_kws": dict(color="black")
+        },
+    numerical_numerical_2_kwargs = {
+        "bins": 20
+        },
     discrete_numerical_1_kwargs = {},
     discrete_numerical_2_kwargs = {},
     discrete_discrete_1_kwargs = {},
-    discrete_discrete_2_kwargs = {},
+    ### heatmap annotation/formatting
+    discrete_discrete_2_kwargs = {
+        "annot": True, "fmt": "d"
+        },
     diag_numerical_kwargs = {},
     diag_discrete_kwargs = {},
     
+    # kwargs for fig.subplots
     **subplots_kwargs
     ):
     
@@ -64,9 +77,9 @@ def pairs(
     # for ax in g.axes.flatten():
     for i in range(len(x_vars)):
         for j in range(len(y_vars)):
+            # x, y variable names and data types,
             x = x_vars[i]
             y = y_vars[j]
-            ax = g[j,i]
             x_dtype = data.dtypes[data.get_column_index(x)]
             y_dtype = data.dtypes[data.get_column_index(y)]
             
@@ -79,36 +92,103 @@ def pairs(
             else:
                 y_dtype = "numerical"
             
-            # diagonal
-            # changed from if i == j?
+            # visualizations for a variable matched with itself
             if x == y:
                 y = None
                 if x_dtype == "discrete":        
                     func, func_kwargs = (diag_discrete, diag_discrete_kwargs)
                 else:
                     func, func_kwargs = (diag_numerical, diag_numerical_kwargs)
-            # lower triangle
-            elif i < j:
+                              
+            # lower triangle or non-square grid visualization logic
+            elif i < j or len(x_vars) != len(y_vars):
                 if x_dtype == "discrete" and y_dtype == "discrete":
                     func, func_kwargs = (discrete_discrete_1, discrete_discrete_1_kwargs)
-                if x_dtype == "numerical" and y_dtype == "numerical":
+                    print("found discrete discrete ", x, y)
+                    print( func, func_kwargs)
+                elif x_dtype == "numerical" and y_dtype == "numerical":
                     func, func_kwargs = (numerical_numerical_1, numerical_numerical_1_kwargs)
                 else:
                     func, func_kwargs = (discrete_numerical_1, discrete_numerical_1_kwargs)
+            
             # upper triangle
             else:
                 if x_dtype == "discrete" and y_dtype == "discrete":
                     func, func_kwargs = (discrete_discrete_2, discrete_discrete_2_kwargs)
-                if x_dtype == "numerical" and y_dtype == "numerical":
+                    print("found discrete discrete ", x, y)
+                    print( func, func_kwargs)                    
+                elif x_dtype == "numerical" and y_dtype == "numerical":
                     func, func_kwargs = (numerical_numerical_2, numerical_numerical_2_kwargs)
                 else:
                     func, func_kwargs = (discrete_numerical_2, discrete_numerical_2_kwargs)
-            # upper triangle
+
+            # draw the graph on the corresponding axis
+            if func is None:
+                continue
             
-            # draw the graph on the axis
-            func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
+            if   len(x_vars) == 1:
+                ax = g[j]
+            elif len(y_vars) == 1:
+                ax = g[i]
+            else:
+                ax = g[j,i]
             
+            # customize plot logic by seaborn plot function
+            if func in [sns.regplot]:
+                func(data=data, x=x, y=y, ax=ax, **func_kwargs)
+                ax.set(xlabel=x, ylabel=y)
+            elif func in [sns.heatmap]:
+                pivot_table = (
+                    data.select(x, y)
+                    .group_by(x, y)
+                    .len()
+                    .pivot(on=x, index=y)
+                    .to_pandas()
+                    .set_index(y)
+                )
+                func(data=pivot_table, ax=ax, **func_kwargs)
+            else:
+                func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
     return g
+
+# %%    ###### CONVERT TO ENUM FUNCTION ########
+
+# Converts selected columns of a dataframe to an ordered enum type
+# works for string and integer columns, but may not work properly for string columns that are
+# based on integers. Need to cast the string column to an integer type column first
+def to_ordered_enum(
+    data: pl.DataFrame, 
+    colnames: list[str],
+    ):
+    
+    # initialise list of expressions to cast 'data' to
+    exprs = []
+    
+    for col in colnames:
+        dtype = data.dtypes[data.get_column_index(col)]
+        
+        # generate list for the Enum type to cast to
+        if dtype.is_(pl.Categorical):
+            sorted_values = data[col].unique().cat.get_categories().sort()
+        elif dtype.is_(pl.Enum):
+            sorted_values = data[col].unique().cast(pl.String).sort()
+        elif dtype.is_numeric():
+            max_digits = len(str(data[col].max()))
+            sorted_values = data[col].unique().sort().cast(pl.String).str.zfill(max_digits) 
+        else:
+            sorted_values = data[col].unique().sort()
+
+        
+        # append an expression to list depending on if it is a numeric type
+        if dtype.is_numeric():
+            exprs.append(pl.col(col).cast(pl.String).str.zfill(max_digits).cast(pl.Enum(sorted_values)))
+        else:
+            exprs.append(pl.col(col).cast(pl.Enum(sorted_values)))
+
+    # change data types of 'data' to Enum for the list of expressions provided
+    data = data.with_columns(*exprs)
+    
+    return data
 
 # %%    ### Fix for -inf/inf categories from qcut/cut function in polars ###
 def fix_cut(data: pl.DataFrame, colnames, col_mins, col_maxs):
@@ -170,3 +250,151 @@ def train_test_split_lazy(
     df_test = df.tail( test_num )
     
     return df_train, df_test
+
+# %%  ### Variable overview across dataset, output to an Excel file ###
+def var_overview(data, filename):
+    with xlsxwriter.Workbook(filename) as wb:  
+        # create format for percent-formatted columns
+        perc_format = wb.add_format({'num_format': '#,##0.00%'})  
+        
+        for col in data.columns:
+            # create the worksheet for the variable
+            ws = wb.add_worksheet(col)
+            
+            # 1. { ... }
+            temp = (
+                data.group_by(col).agg(
+                    pl.len().alias("count"),
+                    (pl.len() / data.height).alias("count_perc"),
+                # pl.sum("Exposure").alias("Total_Exposure"),
+                # pl.sum("ClaimNb").alias("Total_ClaimNb"),
+                # )
+                # .with_columns(
+                #     (pl.col("Total_ClaimNb") / pl.col("Total_Exposure")).alias("Claim_Freq"),
+                #     (pl.sum("Total_ClaimNb") / pl.sum("Total_Exposure")).alias("average_freq")
+                ).sort(col)
+            )
+            # print(temp)
+            
+            # output this section only if lower than 100,000 categories
+            max_height_1 = 100_000
+            if temp.height <= max_height_1:
+                temp.write_excel(
+                    workbook=wb, 
+                    worksheet=col,
+                    position="A1",
+                    table_name=col,
+                    table_style="Table Style Medium 26",
+                    hide_gridlines=True,
+                    column_formats={'count_perc': '0.00%'
+                                    # , 'Claim_Freq': '0.00%'
+                                    # , 'Total_Exposure': '#,##0'
+                                    },
+                    autofit=True
+                )
+                
+                
+            # 2. { ... }
+            summary = data.select(pl.col(col)).to_series().describe()
+            additional = temp.select(
+                pl.col(col).len().alias("distinct_count")
+                ).unpivot(variable_name="statistic", value_name="value")
+            
+            summary.write_excel(
+                workbook=wb, 
+                worksheet=col,
+                position=(0, temp.width + 1),
+                table_name=col + "_summary",
+                table_style="Table Style Medium 26",
+                hide_gridlines=True,
+                autofit=True
+            )
+            
+            additional.write_excel(
+                workbook=wb, 
+                worksheet=col,
+                position=(summary.height + 2, temp.width + 1),
+                table_name=col + "_additional",
+                table_style="Table Style Medium 26",
+                hide_gridlines=True,
+            )  
+
+            # 3. { ... }
+            # don't provide graphs for variables with a high # of categories
+            max_height_2 = 1000
+            if temp.height > max_height_2:
+                continue
+            
+            # don't include data labels in graph if exceeding 10 unique values
+            max_height_3 = 10
+            data_labels = temp.height <= max_height_3
+            
+            # Row count chart
+            chart = wb.add_chart({"type": "column"})
+            chart.set_title({"name": col})
+            chart.set_legend({"none": True})
+            chart.set_style(38)
+            chart.add_series(
+                {  # note the use of structured references
+                    "values": "={}[{}]".format(col, "count"),
+                    "categories": "={}[{}]".format(col, col),
+                    "data_labels": {"value": data_labels},
+                }
+            )
+            
+            # add chart to the worksheet
+            ws.insert_chart(0, temp.width + 1 + summary.width + 1, chart)
+        
+            # # Exposure and Freq chart
+            # column_chart = wb.add_chart({"type": "column"})
+            # column_chart.set_title({"name": col})
+            # column_chart.set_legend({"none": False, "position": "bottom"})
+            # column_chart.set_style(38)
+            # column_chart.add_series(
+            #     {  # note the use of structured reference
+            #         "name": "Total_Exposure",
+            #         "values": "={}[{}]".format(col, "Total_Exposure"),
+            #         "categories": "={}[{}]".format(col, col),
+            #         "data_labels": {"value": False},
+            #     }
+            # )
+
+            # # Create a new line chart. This will use this as the secondary chart.
+            # line_chart = wb.add_chart({"type": "line"})
+
+            # # Configure the data series for the secondary chart. We also set a
+            # # secondary Y axis via (y2_axis).
+            # line_chart.add_series(
+            #     {
+            #         "name": "Claim Frequency",
+            #         "values": "={}[{}]".format(col, "Claim_Freq"),
+            #         "categories": "={}[{}]".format(col, col),
+            #         "y2_axis": True,
+            #         "line": {'width': 3, 'color': '#770737'}
+            #     }
+            # )
+            
+            # line_chart.add_series(
+            #     {
+            #         "name": "Average Claim Frequency",
+            #         "values": "={}[{}]".format(col, "average_freq"),
+            #         "categories": "={}[{}]".format(col, col),
+            #         "y2_axis": True,
+            #         "line": {'width': 1.5, 'dash_type': 'dash'}
+            #     }
+            # )
+
+            # # Combine the charts.
+            # column_chart.combine(line_chart)
+
+            # # Add a chart title and some axis labels.
+            # column_chart.set_title({"name": "Exposure and Claim Frequency"})
+            # column_chart.set_x_axis({"name": col})
+            # column_chart.set_y_axis({"name": "Exposure"})
+
+            # # Note: the y2 properties are on the secondary chart.
+            # line_chart.set_y2_axis({"name": "Claim Frequency"})
+            
+            # ws.insert_chart(18, temp.width + 1 + summary.width + 1, column_chart, 
+            #                 options={'x_scale': 1.5, 'y_scale': 1.5}
+            # )
