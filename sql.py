@@ -66,11 +66,26 @@ with engine.connect() as connection:
         print(row)
 
 # %%
+##############################
+customer_list = ['ABC', '123']
+
+# parameterized query placeholders
+placeholders = ",".join("?" * len(customer_list))
+# query table
+query = """
+SELECT
+[ID],
+[Customer]
+FROM xyz.dbo.abc
+WHERE [Customer] IN (%s)
+""" % placeholders
+print(query)
+
+############################
 var1 = 5
 var2 = 6
 sql = "INSERT INTO test_sql VALUES (%d, %d)"
-args= var1, var2
-
+args = var1, var2
 
 metadata = MetaData()
 users = Table('test_sql', metadata,

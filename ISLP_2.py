@@ -1,4 +1,6 @@
 # %%
+# potential solutions: https://www.lackos.xyz/itsl/
+
 # Library imports
 from funcs import *
 import numpy as np
@@ -545,27 +547,18 @@ titanic = sns.load_dataset("titanic")
 sns.swarmplot(titanic, x="class",y="sex")
 
 # %%
-
 sort_cats = pl.DataFrame(
     [pl.Series("blah",["1","15","152"]),
      pl.Series("blah2",[1, 152, 15]),
      pl.Series("blah3",["a","dd","b"])
     ]
-    , 
-    # schema={"blah":pl.Categorical}
     )
-sort_cats
-sort_cats.with_columns(pl.col("blah").cast(pl.Enum(pl.col("blah").implode())))
-sort_cats.with_columns(pl.col("blah").cast(pl.Enum(["1","15","152"])))
-sort_cats.select((pl.col("blah2").max()-1).cast(pl.String).str.len_chars())
-sort_cats.select( [pl.col("blah2").alias("alias") + 10, pl.col("blah3")])
-testsss = to_ordered_enum(sort_cats, ["blah", "blah2","blah3"])
-testsss.dtypes
-to_ordered_enum(testsss, ["blah"])
 
-
+test_enum = to_ordered_enum(sort_cats, ["blah", "blah2","blah3"])
+test_enum.dtypes
 # %%    ### 2.4  page 65 ###
 
+####### 8.)
 ### a)
 college = pl.scan_csv("data/College.csv").collect()
 college.head()
@@ -573,22 +566,17 @@ college.schema
 
 ### c)
 college.describe()
-### d)
-first_cols = ["Top10perc", "Apps"]
-college.select(first_cols)
-# sns.pairplot(college.select(first_cols).to_pandas())
-g = sns.PairGrid(college.select(first_cols).filter(pl.col("Apps")<40000), x_vars=first_cols, y_vars=first_cols)
 
-g.map_lower(sns.scatterplot)
-# g.map_upper(sns.kdeplot)
-g.map_diag(sns.histplot)
+### d)
+first_cols = ["Top10perc", "Apps", "Enroll"]
+g = sns.PairGrid(college.select(first_cols).filter(pl.col("Apps")<40000), 
+                 x_vars=first_cols, y_vars=first_cols)
+g.map_lower(sns.histplot, bins=20)
+# map_upper doesn't seem to be working
+g.map_upper(sns.scatterplot)
+g.map_diag(sns.histplot, kde=True, bins=20)
 g.axes[0,0].set_xlim(0, 50)
 g.axes[0,0].set_ylim(0, 0.04)
-
-plt.show()
-plt.close()
-
-sns.histplot(college["Top10perc"], kde=True)
 plt.show()
 plt.close()
 
@@ -597,70 +585,87 @@ sns.barplot(test1, x="Top10perc", y="count")
 plt.show()
 plt.close()
 
+# custom pairs function testing
 from funcs import *
-x_vars = ["Top10perc", "Apps", "Private"]
-g = pairs(college, x_vars = x_vars, y_vars = x_vars, hue="Private", 
-      figsize=(16, 16))
-
-sns.histplot(data=college,x="Top10perc", y="Apps", bins=20)
+x_vars = ["Top10perc", "Apps", "Enroll"]
+x_vars = college.select(cs.numeric()).columns[:10]
+x_vars
+college.shape
+g = pairs(college, x_vars=x_vars, y_vars=x_vars, 
+          sharex=False, sharey=False, # hue="Private", 
+          figsize=(60, 60))
+# plt.gcf().subplots_adjust(bottom=0.05, left=0.1, top=0.95, right=0.95)
+plt.suptitle('College Scatter Matrix', fontsize=35, y=0.90)
 plt.show()
-# %%
-fig, ax = plt.subplots(3, 3)
-sns.histplot(college, x="Top10perc",ax=ax[0,0])
-# %%
-x_vars = ["sepal_width","species"]
-y_vars = ["petal_length","petal_width"]
-# sns.countplot(pl.DataFrame(iris), x="species")
-# pl.DataFrame(iris)["species"].value_counts()
+plt.close()
 
-iris = sns.load_dataset('iris')
-pairs(pl.DataFrame(iris), x_vars, x_vars, sharex=False, sharey=False, figsize=(8,8))
-
-# %%
-customer_list = ['ABC', '123']
-
-# parameterized query placeholders
-placeholders = ",".join("?" * len(customer_list))
-
-# query table
-query = """
-SELECT
-[ID],
-[Customer]
-FROM xyz.dbo.abc
-WHERE [Customer] IN (%s)
-""" % placeholders
-
-print(query)
-# %%
-data = sns.load_dataset("titanic")
-sns.catplot(data=data, x="class", hue="sex", kind="count")
+### e)
+plt.figure(figsize=(4,6))
+# fig = plt.figure()
+# fig.set_size_inches(4, 6)
+sns.boxplot(college, x="Elite", y="Outstate")
 plt.show()
+plt.close()
+
+### f)
+college = college.with_columns(
+    pl.col("Top10perc").cut([50],labels=["No","Yes"]).alias("Elite"),
+    pl.col("Top10perc").qcut([0.25, 0.75], labels=["Low","Med","High"]).alias("Elite_q"),
+)
+college["Elite"].value_counts()
+
+### g)
+fig, ax = plt.subplots(3, 3, figsize=(16,16))
+college.schema
+bins = [5, 15, 25]
+
+for i in range(len(x_vars)):
+    for j in range(len(bins)):
+        bin = bins[j]
+        var = x_vars[i]
+        # var by row, bin by col
+        axes = ax[i,j]
+        sns.histplot(data=college, x=var, 
+                     bins=bin, ax=axes)
+        
+### h) ...
+
+        
+
+# %%  ##### 9.) page 66
+auto = pl.scan_csv("data/Auto.csv").collect()
+auto.schema
+auto.head()
+auto["cylinders"].value_counts()
+auto["origin"].value_counts()
+auto["name"].value_counts().sort("count", descending=True)
+auto = to_ordered_enum(auto, ["cylinders", "origin", "name"])
+auto.head()
+
+auto.null_count()
+var_overview(auto, "auto_overview.xlsx")
+
+### adding a new statistic to a summary
+d = auto.describe()
+non_num = d.select(cs.exclude(cs.numeric(), "statistic")).columns
+non_num_dtypes = [(d.dtypes)[d.get_column_index(name)] for name in non_num]
+exprs = [pl.lit(None).cast(dtype).alias(name) 
+         for (name, dtype) in zip(non_num, non_num_dtypes)]
+exprs
+e = auto.select(
+    (cs.numeric().max() - cs.numeric().min()).cast(pl.Float64),
+    *exprs,
+    pl.lit("range").alias("statistic")
+)
+e.select(d.columns)
+d.extend(e.select(d.columns))
+auto.select(
+    cs.numeric().max().name.suffix("_max"),
+    cs.numeric().min().name.suffix("_min"),
+    (cs.numeric().max() - cs.numeric().min()).name.suffix("_range")
+).unpivot()
 # %%
-data = sns.load_dataset("titanic")
-pivot_table = pd.crosstab(data['class'], data['sex'])
-pivot_table
-sns.heatmap(pivot_table, annot=True, fmt="d")
-plt.show()
-sns.heatmap()
-data = pl.DataFrame(sns.load_dataset("titanic"))
-data.schema
-pivotted = data.group_by('class','sex').len().pivot(on="sex", index="class")
-pivotted
-sns.heatmap(pivotted.to_pandas().set_index("class"), annot=True, fmt="d")
-pivotted = data.group_by('class','sex').len().pivot(on="class", index="sex")
-pivotted
-sns.heatmap(pivotted.to_pandas().set_index("sex"), annot=True, fmt="d")
-my_vars = ["class","sex", "fare"]
-pairs(data, x_vars=my_vars, y_vars=my_vars, hue="deck",figsize=(18,18))
-pairs(data, x_vars=["fare"], y_vars=["sex","class"], hue="deck")
-pairs(data.filter(pl.col("class").is_in(["Second","Third"])), 
-      x_vars=["fare"], y_vars=["sex","class"], hue="deck",
-      figsize=(12,12))
 
+# %%
 
-test_plt = plt.subplots(2,1)
-test_plt[1].ndim
-test_plt2 = plt.subplots(2,2)
-test_plt2[1].ndim
 # %%

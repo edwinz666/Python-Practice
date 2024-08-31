@@ -38,55 +38,62 @@ def pairs(
     # variable names
     x_vars: list[str], y_vars: list[str], hue: str = None,
     
-    # define visualization based on variable types and pairs
-    # also define a 2nd visualization for square grids
-    numerical_numerical_1 = sns.regplot,
-    numerical_numerical_2 = sns.histplot,
-    discrete_numerical_1 = sns.boxplot,
-    discrete_numerical_2 = sns.violinplot,
-    discrete_discrete_1 = sns.histplot,
-    discrete_discrete_2 = sns.heatmap,
-    diag_numerical = sns.histplot,
-    diag_discrete = sns.countplot,
+    # define visualizations based on variable types and pairs based on
+    # a tuple in the form (seaborn visualization function, dict[kwargs])
     
-    # kwargs for each seaborn visualization defined
-    numerical_numerical_1_kwargs = {
+    # numeric against numeric, visualizations #1 and #2
+    numerical_numerical_1 = (
+        sns.regplot,
+        {
         "ci": None, "line_kws": dict(color="black")
-        },
-    numerical_numerical_2_kwargs = {
+        }
+    ),
+    numerical_numerical_2 = (
+        sns.histplot, 
+        {
         "bins": 20
-        },
-    discrete_numerical_1_kwargs = {},
-    discrete_numerical_2_kwargs = {},
-    discrete_discrete_1_kwargs = {},
-    ### heatmap annotation/formatting
-    discrete_discrete_2_kwargs = {
-        "annot": True, "fmt": "d"
-        },
-    diag_numerical_kwargs = {},
-    diag_discrete_kwargs = {},
+        }
+    ),
     
-    # kwargs for fig.subplots
+    # discrete against numeric, visualizations #1 and #2
+    discrete_numerical_1 = (sns.boxplot, {}),
+    discrete_numerical_2 = (sns.violinplot, {}),
+    
+    # discrete against discrete, visualizations #1, and #2
+    discrete_discrete_1 = (sns.histplot, {}),
+    discrete_discrete_2 = (
+        sns.heatmap,
+        {
+        "annot": True, "fmt": "d"
+        }
+    ),
+    
+    # a variable plotted against itself, dependent on discrete or numeric
+    diag_numerical = (sns.histplot, {}),
+    diag_discrete = (sns.countplot, {}),
+    
+    # kwargs for plt.subplots
     **subplots_kwargs
     ):
     
-    # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, 
-    #              **kwargs)
+    # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, **kwargs)
     _, g = plt.subplots(len(y_vars),len(x_vars), **subplots_kwargs)
 
     # for ax in g.axes.flatten():
     for i in range(len(x_vars)):
         for j in range(len(y_vars)):
-            # x, y variable names and data types,
+            # x, y variable names and data types
             x = x_vars[i]
             y = y_vars[j]
             x_dtype = data.dtypes[data.get_column_index(x)]
             y_dtype = data.dtypes[data.get_column_index(y)]
             
+            # assumptions on discrete vs numerical based on polars data type
             if x_dtype in [pl.Categorical, pl.Enum, pl.String]:
                 x_dtype = "discrete"
             else:
                 x_dtype = "numerical"
+                
             if y_dtype in [pl.Categorical, pl.Enum, pl.String]:
                 y_dtype = "discrete"
             else:
@@ -96,36 +103,35 @@ def pairs(
             if x == y:
                 y = None
                 if x_dtype == "discrete":        
-                    func, func_kwargs = (diag_discrete, diag_discrete_kwargs)
+                    func, func_kwargs = diag_discrete
                 else:
-                    func, func_kwargs = (diag_numerical, diag_numerical_kwargs)
+                    func, func_kwargs = diag_numerical
                               
             # lower triangle or non-square grid visualization logic
             elif i < j or len(x_vars) != len(y_vars):
                 if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = (discrete_discrete_1, discrete_discrete_1_kwargs)
-                    print("found discrete discrete ", x, y)
-                    print( func, func_kwargs)
+                    func, func_kwargs = discrete_discrete_1
                 elif x_dtype == "numerical" and y_dtype == "numerical":
-                    func, func_kwargs = (numerical_numerical_1, numerical_numerical_1_kwargs)
+                    func, func_kwargs = numerical_numerical_1
                 else:
-                    func, func_kwargs = (discrete_numerical_1, discrete_numerical_1_kwargs)
+                    func, func_kwargs = discrete_numerical_1
             
             # upper triangle
             else:
                 if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = (discrete_discrete_2, discrete_discrete_2_kwargs)
-                    print("found discrete discrete ", x, y)
-                    print( func, func_kwargs)                    
+                    func, func_kwargs = discrete_discrete_2                 
                 elif x_dtype == "numerical" and y_dtype == "numerical":
-                    func, func_kwargs = (numerical_numerical_2, numerical_numerical_2_kwargs)
+                    func, func_kwargs = numerical_numerical_2
                 else:
-                    func, func_kwargs = (discrete_numerical_2, discrete_numerical_2_kwargs)
+                    func, func_kwargs = discrete_numerical_2
 
-            # draw the graph on the corresponding axis
+            ### draw the graph on the corresponding axis
+            # skip when no function is defined 
             if func is None:
                 continue
-            
+
+            # matplotlib's plt.subplots has only 1 dimension when specify
+            # 1 of either x or y variables
             if   len(x_vars) == 1:
                 ax = g[j]
             elif len(y_vars) == 1:
@@ -134,6 +140,7 @@ def pairs(
                 ax = g[j,i]
             
             # customize plot logic by seaborn plot function
+            # some functions may not have a 'hue' argument etc.
             if func in [sns.regplot]:
                 func(data=data, x=x, y=y, ax=ax, **func_kwargs)
                 ax.set(xlabel=x, ylabel=y)
