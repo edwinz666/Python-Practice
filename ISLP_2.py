@@ -633,6 +633,8 @@ for i in range(len(x_vars)):
         
 
 # %%  ##### 9.) page 66
+
+### a)
 auto = pl.scan_csv("data/Auto.csv").collect()
 auto.schema
 auto.head()
@@ -645,6 +647,7 @@ auto.head()
 auto.null_count()
 var_overview(auto, "auto_overview.xlsx")
 
+### b) and c)
 ### adding a new statistic to a summary
 d = auto.describe()
 non_num = d.select(cs.exclude(cs.numeric(), "statistic")).columns
@@ -664,8 +667,32 @@ auto.select(
     cs.numeric().min().name.suffix("_min"),
     (cs.numeric().max() - cs.numeric().min()).name.suffix("_range")
 ).unpivot()
-# %%
 
-# %%
+### d)
+obs_to_remove = np.arange(9, 85)
+auto_2 = (
+    auto.with_row_index().filter(~pl.col("index").is_in(obs_to_remove))
+    .select(pl.exclude("index"))
+)
+auto_2
+auto_2.describe()
 
+### e)
+auto.schema
+# name has too many categories to visualize well
+test_cols = auto.select(cs.exclude("name")).columns
+test_cols
+pairs(auto, x_vars=test_cols, y_vars=test_cols, figsize=(48,48))
+pairs(data=auto,
+      x_vars=["horsepower","mpg"],y_vars=["horsepower"])
+pairs(data=auto,
+      x_vars=["horsepower"],y_vars=["horsepower","mpg"])
+
+# %%  ##### 2.4 page 67 #####
+
+### 10a)
+boston = pl.scan_csv("data/Boston.csv").collect()
+boston.schema
+boston.head()
+boston.describe()
 # %%

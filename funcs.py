@@ -36,10 +36,17 @@ def pairs(
     # dataset
     data: pl.DataFrame,
     # variable names
-    x_vars: list[str], y_vars: list[str], hue: str = None,
+    x_vars: list[str] = None, 
+    y_vars: list[str] = None, 
+    hue: str = None,
     
     # define visualizations based on variable types and pairs based on
     # a tuple in the form (seaborn visualization function, dict[kwargs])
+    # each variable type pair has 2 visualizations, where the
+    # first visualization is for lower triangle/non-square grids, and the
+    # second visualization is for the upper triangle. 
+    # Where a variable matches with itself, regardless of its position, 
+    # the diag_{numerical, discrete} graphs are plotted instead
     
     # numeric against numeric, visualizations #1 and #2
     numerical_numerical_1 = (
@@ -60,13 +67,13 @@ def pairs(
     discrete_numerical_2 = (sns.violinplot, {}),
     
     # discrete against discrete, visualizations #1, and #2
-    discrete_discrete_1 = (sns.histplot, {}),
-    discrete_discrete_2 = (
+    discrete_discrete_1 = (
         sns.heatmap,
         {
         "annot": True, "fmt": "d"
         }
     ),
+    discrete_discrete_2 = (sns.histplot, {}),
     
     # a variable plotted against itself, dependent on discrete or numeric
     diag_numerical = (sns.histplot, {}),
@@ -75,6 +82,12 @@ def pairs(
     # kwargs for plt.subplots
     **subplots_kwargs
     ):
+    
+    if x_vars is None:
+        x_vars = data.columns
+
+    if y_vars is None:
+        y_vars = data.columns
     
     # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, **kwargs)
     _, g = plt.subplots(len(y_vars),len(x_vars), **subplots_kwargs)
@@ -108,7 +121,7 @@ def pairs(
                     func, func_kwargs = diag_numerical
                               
             # lower triangle or non-square grid visualization logic
-            elif i < j or len(x_vars) != len(y_vars):
+            elif i <= j or len(x_vars) != len(y_vars):
                 if x_dtype == "discrete" and y_dtype == "discrete":
                     func, func_kwargs = discrete_discrete_1
                 elif x_dtype == "numerical" and y_dtype == "numerical":
@@ -130,9 +143,11 @@ def pairs(
             if func is None:
                 continue
 
-            # matplotlib's plt.subplots has only 1 dimension when specify
-            # 1 of either x or y variables
-            if   len(x_vars) == 1:
+            # matplotlib's plt.subplots has 0, 1, or 2 dimensions depending on
+            # length of x_vars and y_vars specified
+            if (len(x_vars) == 1) and (len(y_vars) == 1):
+                ax = g
+            elif len(x_vars) == 1:
                 ax = g[j]
             elif len(y_vars) == 1:
                 ax = g[i]
@@ -150,12 +165,17 @@ def pairs(
                     .group_by(x, y)
                     .len()
                     .pivot(on=x, index=y)
+                    .fill_null(0)
                     .to_pandas()
                     .set_index(y)
                 )
                 func(data=pivot_table, ax=ax, **func_kwargs)
+                ax.set(xlabel=x, ylabel=y)
             else:
                 func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
+        
+    plt.show()
+
     return g
 
 # %%    ###### CONVERT TO ENUM FUNCTION ########
