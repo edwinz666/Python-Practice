@@ -1,14 +1,21 @@
 # %%
 # potential solutions: https://www.lackos.xyz/itsl/
+# good package explanation https://stackoverflow.com/questions/9048518/importing-packages-in-python
 
 # Library imports
 from funcs import *
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import seaborn as sns
-import statsmodels as sm
+# import statsmodels as sm
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence \
+import variance_inflation_factor as VIF
+from statsmodels.stats.anova import anova_lm
+
 import pyarrow as pa
 
 import polars as pl
@@ -19,9 +26,51 @@ from pandas.tseries.offsets import Hour, Minute, Day, MonthEnd
 from pandas.tseries.frequencies import to_offset
 from scipy.stats import percentileofscore
 
-import ISLP as islp
-
 import xlsxwriter
+
+
+
+from functools import partial
+
+import sklearn.metrics as sklm
+import sklearn as skl
+import sklearn.discriminant_analysis as skl_da
+from sklearn.model_selection import \
+     (cross_validate,
+      KFold,
+      ShuffleSplit)
+from sklearn.base import clone
+
+from sklearn.discriminant_analysis import \
+     (LinearDiscriminantAnalysis as LDA,
+      QuadraticDiscriminantAnalysis as QDA)
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+import sklearn.model_selection as skm
+from sklearn.model_selection import train_test_split
+import sklearn.linear_model as skl
+from sklearn.linear_model import LogisticRegression
+
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
+from sklearn.cross_decomposition import PLSRegression
+
+import ISLP as islp
+from ISLP import load_data
+from ISLP.models import (ModelSpec as MS ,
+summarize ,
+poly)
+
+from ISLP.models import sklearn_sm
+
+from ISLP import confusion_table
+from ISLP.models import contrast
+
+from ISLP.models import \
+     (Stepwise,
+      sklearn_selected,
+      sklearn_selection_path)
 
 plt.style.use('ggplot')
 ax1 = sns.set_style(style=None, rc=None )
@@ -662,6 +711,8 @@ e = auto.select(
 )
 e.select(d.columns)
 d.extend(e.select(d.columns))
+# pl.concat([d, e], how="diagonal")
+
 auto.select(
     cs.numeric().max().name.suffix("_max"),
     cs.numeric().min().name.suffix("_min"),
@@ -683,16 +734,968 @@ auto.schema
 test_cols = auto.select(cs.exclude("name")).columns
 test_cols
 pairs(auto, x_vars=test_cols, y_vars=test_cols, figsize=(48,48))
-pairs(data=auto,
-      x_vars=["horsepower","mpg"],y_vars=["horsepower"])
-pairs(data=auto,
-      x_vars=["horsepower"],y_vars=["horsepower","mpg"])
 
 # %%  ##### 2.4 page 67 #####
 
-### 10a)
+### 10a) 10b)
 boston = pl.scan_csv("data/Boston.csv").collect()
 boston.schema
+boston.shape
 boston.head()
 boston.describe()
-# %%
+
+### 10c)
+var_overview(boston, "boston_overview.xlsx")
+g = pairs(boston, figsize=(48,48))
+plt.suptitle('Boston Scatter Matrix', fontsize=35, y=0.9)
+plt.show()
+plt.close()
+
+### 10e)
+boston.top_k(10, by=["crim"])
+boston.top_k(10, by=["tax"])
+boston.top_k(10, by=["ptratio"])
+# %%    ##### Lab 3.6 page 117 #####
+
+boston = load_data("Boston")
+boston_pl = pl.DataFrame(boston)
+boston_pl.columns
+
+X = pd.DataFrame (
+    {'intercept ': np.ones(boston.shape[0]),
+     'lstat ': boston['lstat']}
+    )
+X
+X_pl = boston_pl.select(
+    pl.lit(1).alias("intercept"),
+    pl.col("lstat")    
+)
+X_pl.to_pandas()
+Y = pd.DataFrame( boston_pl["medv"], columns=["medv"])
+Y
+Y_pl = boston_pl["medv"]
+Y_pl.to_pandas()
+
+### fit linear model
+model = sm.OLS(Y, X)
+results = model.fit()
+results.params
+model_pl = sm.OLS(Y_pl.to_pandas(), X_pl.to_pandas())
+results_pl = model_pl.fit()
+summarize(results)
+summarize(results_pl)
+
+# fit and transform method
+design = MS(["lstat"])
+design = design.fit(boston)
+X = design.transform(boston)
+X[:4]
+
+## predict on new data
+new_df = pd.DataFrame ({'lstat':[5, 10, 15]})
+newX = design.transform(new_df)
+newX
+
+new_predictions = results.get_prediction(newX)
+# predicted mean, confidence/prediction intervals
+new_predictions.predicted_mean
+new_predictions.conf_int(alpha=0.05)
+new_predictions.conf_int(alpha=0.05, obs=True)
+
+# graph the fit
+def abline(ax, b, m, *args, **kwargs):
+    "Add a line with slope m and intercept b to ax"
+    xlim = ax.get_xlim()
+    ylim = [m * xlim[0] + b, m * xlim[1] + b]
+    ax.plot(xlim, ylim, *args, **kwargs)
+ax = boston.plot.scatter('lstat', 'medv')
+abline(ax,
+       results.params[0],
+       results.params[1],
+       'r--',
+       linewidth=3)
+pairs(boston_pl, x_vars=["lstat"], y_vars=["medv"])
+
+# residual plot
+ax = plt.subplots(figsize=(8,8))[1]
+ax.scatter(results.fittedvalues, results.resid)
+ax.set_xlabel('Fitted value')
+ax.set_ylabel('Residual')
+ax.axhline(0, c='k', ls='--')
+
+# leverage statistics
+infl = results.get_influence()
+ax = plt.subplots(figsize=(8,8))[1]
+ax.scatter(np.arange(X.shape[0]), infl.hat_matrix_diag)
+ax.set_xlabel('Index')
+ax.set_ylabel('Leverage')
+np.argmax(infl.hat_matrix_diag)
+infl.hat_matrix_diag.shape
+pl.DataFrame(dir(infl)).filter(
+    pl.col("column_0").str.starts_with("__").not_()
+    ).sort("column_0")
+
+### Multiple linear regression
+X = MS(['lstat', 'age']).fit_transform(boston)
+model1 = sm.OLS(Y, X)
+results1 = model1.fit()
+summarize(results1)
+
+### X without the response 'medv'
+terms = boston.columns.drop("medv")
+X = MS(terms).fit_transform(boston)
+model = sm.OLS(Y, X)
+results = model.fit()
+summarize(results)
+
+### X without response and one of the predictors 'age'
+minus_age = boston.columns.drop(['medv', 'age']) 
+Xma = MS(minus_age).fit_transform(boston)
+model1 = sm.OLS(Y, Xma)
+summarize(model1.fit())
+
+### VIFs
+### matrix of X, but skip intercept column
+vals = [VIF(X, i) for i in range(1, X.shape[1])]
+vif = pd.DataFrame({'vif':vals},
+                   index=X.columns[1:])
+vif
+
+### interaction terms
+X = MS(['lstat',
+        'age',
+        ('lstat', 'age')]).fit_transform(boston)
+model2 = sm.OLS(Y, X)
+summarize(model2.fit())
+
+### non-linear transformations of predictors
+X = MS([poly('lstat', degree=2), 'age']).fit_transform(boston)
+model3 = sm.OLS(Y, X)
+results3 = model3.fit()
+summarize(results3)
+
+boston.shape
+anova_lm(results1, results3)
+
+### plot residuals
+ax = plt.subplots(figsize=(8,8))[1]
+ax.scatter(results3.fittedvalues, results3.resid)
+
+ax.set_xlabel('Fitted value')
+ax.set_ylabel('Residual')
+ax.axhline(0, c='k', ls='--')
+
+### Qualitative predictors
+Carseats = load_data('Carseats')
+Carseats.columns
+
+# fit a multiple regression model w/interactions, qualititative
+allvars = list(Carseats.columns.drop('Sales'))
+y = Carseats['Sales']
+final = allvars + [('Income', 'Advertising'),
+                   ('Price', 'Age')]
+X = MS(final).fit_transform(Carseats)
+model = sm.OLS(y, X)
+summarize(model.fit())
+
+
+# %% ##### Logistic Regression, LDA, QDA, KNN
+import numpy as np
+import pandas as pd
+from matplotlib.pyplot import subplots
+import statsmodels.api as sm
+from ISLP import load_data
+from ISLP.models import (ModelSpec as MS,
+                         summarize)
+
+from ISLP import confusion_table
+from ISLP.models import contrast
+from sklearn.discriminant_analysis import \
+     (LinearDiscriminantAnalysis as LDA,
+      QuadraticDiscriminantAnalysis as QDA)
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+
+Smarket = load_data('Smarket')
+Smarket
+Smarket.columns
+Smarket.corr(numeric_only=True)
+
+sns.lineplot(Smarket, x="Year",y="Volume", 
+             errorbar=('ci',False))
+g = sns.lineplot(Smarket, x=np.arange(Smarket.shape[0]),y="Volume", 
+             errorbar=('ci',False))
+plt.legend(['Volume'])
+Smarket.plot(y="Volume")
+
+## Logistic regression
+allvars = Smarket.columns.drop(['Today', 'Direction', 'Year'])
+design = MS(allvars)
+X = design.fit_transform(Smarket)
+y = Smarket.Direction == 'Up'
+glm = sm.GLM(y,
+             X,
+             family=sm.families.Binomial())
+results = glm.fit()
+summarize(results)
+## alternative using sm.Logit
+summarize(sm.Logit(y,X).fit())
+
+# parameters, pvalues
+results.params
+results.pvalues
+pl.DataFrame(dir(results)).filter(
+    pl.all().str.starts_with('_').not_()
+)
+
+# predictions/confusion matrix
+probs = results.predict()
+probs[:10]
+labels = np.array(['Down']*1250)
+labels[probs>0.5] = "Up"
+labels
+confusion_table(labels, Smarket.Direction)
+sklm.confusion_matrix(
+    y_true=Smarket.Direction, 
+    y_pred=labels,
+    labels=["Down","Up"])
+
+# training error rate on whole data
+np.mean(labels == Smarket.Direction)
+
+### test error rate
+train = (Smarket.Year < 2005)
+Smarket_train = Smarket.loc[train]
+Smarket_test = Smarket.loc[~train]
+Smarket_test.shape
+
+# train test split
+# note y train/tests vectors are True/False
+train
+X_train, X_test = X.loc[train], X.loc[~train]
+y_train, y_test = y.loc[train], y.loc[~train]
+glm_train = sm.GLM(y_train,
+                   X_train,
+                   family=sm.families.Binomial())
+results = glm_train.fit()
+probs = results.predict(exog=X_test)
+
+# get labels of predictions on test y data
+D = Smarket.Direction
+L_train, L_test = D.loc[train], D.loc[~train]
+labels = np.array(['Down']*L_test.shape[0])
+labels[probs>0.5] = 'Up'
+confusion_table(labels, L_test)
+np.mean(labels == L_test), np.mean(labels != L_test)
+
+## refitting with only few of the more significant
+model = MS(['Lag1', 'Lag2']).fit(Smarket)
+X = model.transform(Smarket)
+X_train, X_test = X.loc[train], X.loc[~train]
+glm_train = sm.GLM(y_train,
+                   X_train,
+                   family=sm.families.Binomial())
+results = glm_train.fit()
+probs = results.predict(exog=X_test)
+labels = np.array(['Down']*L_test.shape[0])
+labels[probs>0.5] = 'Up'
+confusion_table(labels, L_test)
+np.mean(labels == L_test), np.mean(labels != L_test)
+# out of predicted labels == True, 
+# how many are actually true?
+( np.sum((labels == "Up") & (L_test == "Up")) / 
+ np.sum(labels == "Up")
+ )
+
+# predict on new data
+newdata = pd.DataFrame({'Lag1':[1.2, 1.5],
+                        'Lag2':[1.1, -0.8]});
+newX = model.transform(newdata)
+newX
+results.predict(newX)
+
+# %%    ##### LDA #####
+lda = LDA(store_covariance=True)
+lda_2 = skl_da.LinearDiscriminantAnalysis()
+lda_2
+
+X_train, X_test = [M.drop(columns=['intercept'])
+                   for M in [X_train, X_test]]
+lda.fit(X_train, L_train)
+lda.means_
+lda.classes_
+# prior(down) = 0.492, prior(up) = 0.508
+lda.priors_
+np.mean(L_train == "Up")
+
+# linear discriminant vectors
+lda.scalings_
+X_train
+np.dot(X_train, lda.scalings_)
+lda_pred = lda.predict(X_test)
+lda_pred
+confusion_table(lda_pred, L_test)
+
+# estimate probability /apply threshold
+lda_prob = lda.predict_proba(X_test)
+lda_prob
+np.all(
+       np.where(lda_prob[:,1] >= 0.5, 'Up','Down') == lda_pred
+       )
+# for more than two classes --> assign to highest class probability
+np.all(
+       [lda.classes_[i] for i in np.argmax(lda_prob, 1)] == lda_pred
+       )
+
+# %%    ##### QDA #####
+qda = QDA(store_covariance=True)
+qda.fit(X_train, L_train)
+qda.means_, qda.priors_
+# validate qda.means
+np.mean(X_train.loc[L_train == "Up", "Lag1"])
+np.mean(X_train.loc[L_train == "Up", "Lag2"])
+np.mean(X_train.loc[L_train == "Down", "Lag1"])
+np.mean(X_train.loc[L_train == "Down", "Lag2"])
+
+# QDA estimates one covariance matrix per class
+qda.covariance_
+# covariance matrix estimate for first class ("Down"?)
+qda.covariance_[0]
+
+# prediction/confusion matrix
+qda_pred = qda.predict(X_test)
+confusion_table(qda_pred, L_test)
+np.mean(qda_pred == L_test)
+
+
+# %%     ##### Naive Bayes #####
+        ### within the kth class, the p predictors are independent ###
+NB = GaussianNB()
+NB.fit(X_train, L_train)
+
+# classes and prior probabilities
+NB.classes_
+NB.class_prior_
+
+# parameters of the features
+# rows are classes, cols are features
+NB.theta_
+NB.var_
+
+# verify the parameters manually
+X_train[L_train == 'Down'].mean()
+X_train[L_train == 'Down'].var(ddof=0)
+
+# making predictions
+nb_labels = NB.predict(X_test)
+confusion_table(nb_labels, L_test)
+NB.predict_proba(X_test)[:5]
+
+# %%    #### KNN #####
+knn1 = KNeighborsClassifier(n_neighbors=1)
+X_train, X_test = [np.asarray(X) for X in [X_train, X_test]]
+knn1.fit(X_train, L_train)
+knn1_pred = knn1.predict(X_test)
+confusion_table(knn1_pred, L_test)
+np.mean(knn1_pred == L_test)
+
+# distribution of responses
+Caravan = load_data('Caravan')
+Purchase = Caravan.Purchase
+Purchase.value_counts() / Purchase.size
+
+# pre-processing, centering/scaling
+feature_df = Caravan.drop(columns=['Purchase'])
+scaler = StandardScaler(with_mean=True,
+                        with_std=True,
+                        copy=True)
+scaler.fit(feature_df)
+X_std = scaler.transform(feature_df)
+X_std
+feature_std = pd.DataFrame(
+                 X_std,
+                 columns=feature_df.columns)
+feature_std
+feature_std.std()
+
+# train-test split
+(X_train, X_test, y_train, y_test) = (
+    train_test_split(
+        feature_std,
+        Purchase,
+        test_size=1000,
+        random_state=0)
+)
+knn1 = KNeighborsClassifier(n_neighbors=1)
+knn1_pred = knn1.fit(X_train, y_train).predict(X_test)
+np.mean(y_test != knn1_pred), np.mean(y_test != "No")
+confusion_table(knn1_pred, y_test)
+
+# tuning hyper parameter 'k'
+# care about % of predicted = Yes actually being Yes in this scenario
+for K in range(1,6):
+    knn = KNeighborsClassifier(n_neighbors=K)
+    knn_pred = knn.fit(X_train, y_train).predict(X_test)
+    C = confusion_table(knn_pred, y_test)
+    templ = ('K={0:d}: # predicted to rent: {1:>2},' +
+            '  # who did rent {2:d}, accuracy {3:.1%}')
+    pred = C.loc['Yes'].sum()
+    did_rent = C.loc['Yes','Yes']
+    print(templ.format(
+          K,
+          pred,
+          did_rent,
+          did_rent / pred))
+
+# %%    ##### Logistic Regression - sklearn #####
+
+# set C argument very high to mimic no regularization
+# solver='liblinear' suppresses a non-converging algorithm message
+logit = LogisticRegression(C=1e10, solver='liblinear')
+logit.fit(X_train, y_train)
+logit_pred = logit.predict_proba(X_test)
+
+# TRY DIFFERENT THRESHOLDS
+logit_labels = np.where(logit_pred[:,1] > .5, 'Yes', 'No')
+confusion_table(logit_labels, y_test)
+logit_labels = np.where(logit_pred[:,1]>0.25, 'Yes', 'No')
+confusion_table(logit_labels, y_test)
+
+# %%    ##### Linear and Poisson regression #####
+Bike = load_data('Bikeshare')
+Bike.shape, Bike.columns
+
+### Linear regression
+X = MS(['mnth',
+        'hr',
+        'workingday',
+        'temp',
+        'weathersit']).fit_transform(Bike)
+Y = Bike['bikers']
+M_lm = sm.OLS(Y, X).fit()
+summarize(M_lm)
+
+## different encoding for some variables -> same results/model,
+## slightly different interpretation
+hr_encode = contrast('hr', 'sum')
+mnth_encode = contrast('mnth', 'sum')
+X2 = MS([mnth_encode,
+         hr_encode,
+        'workingday',
+        'temp',
+        'weathersit']).fit_transform(Bike)
+X2
+M2_lm = sm.OLS(Y, X2).fit()
+S2 = summarize(M2_lm)
+S2
+np.sum((M_lm.fittedvalues - M2_lm.fittedvalues)**2)
+np.allclose(M_lm.fittedvalues, M2_lm.fittedvalues)
+
+# extra coefficients relating to mnth
+coef_month = S2[S2.index.str.contains('mnth')]['coef']
+coef_month
+months = Bike['mnth'].dtype.categories
+coef_month = pd.concat([
+                       coef_month,
+                       pd.Series([-coef_month.sum()],
+                                  index=['mnth[Dec]'
+                                 ])
+                       ])
+coef_month
+
+# plot coefficients for mnth
+fig_month, ax_month = subplots(figsize=(8,8))
+x_month = np.arange(coef_month.shape[0])
+ax_month.plot(x_month, coef_month, marker='o', ms=10)
+ax_month.set_xticks(x_month)
+ax_month.set_xticklabels([l[5] for l in coef_month.index], fontsize=20)
+ax_month.set_xlabel('Month', fontsize=20)
+ax_month.set_ylabel('Coefficient', fontsize=20)
+
+# do same for hour
+coef_hr = S2[S2.index.str.contains('hr')]['coef']
+coef_hr = coef_hr.reindex(['hr[{0}]'.format(h) for h in range(23)])
+coef_hr = pd.concat([coef_hr,
+                     pd.Series([-coef_hr.sum()], index=['hr[23]'])
+                    ])
+fig_hr, ax_hr = subplots(figsize=(8,8))
+x_hr = np.arange(coef_hr.shape[0])
+ax_hr.plot(x_hr, coef_hr, marker='o', ms=10)
+ax_hr.set_xticks(x_hr[::2])
+ax_hr.set_xticklabels(range(24)[::2], fontsize=20)
+ax_hr.set_xlabel('Hour', fontsize=20)
+ax_hr.set_ylabel('Coefficient', fontsize=20)
+
+# %%    ##### Poison Regression #####
+M_pois = sm.GLM(Y, X2, family=sm.families.Poisson()).fit()
+S_pois = summarize(M_pois)
+coef_month = S_pois[S_pois.index.str.contains('mnth')]['coef']
+coef_month = pd.concat([coef_month,
+                        pd.Series([-coef_month.sum()],
+                                   index=['mnth[Dec]'])])
+coef_hr = S_pois[S_pois.index.str.contains('hr')]['coef']
+coef_hr = pd.concat([coef_hr,
+                     pd.Series([-coef_hr.sum()],
+                     index=['hr[23]'])])
+
+# plot coefficients for month hr for Poisson regression
+fig_pois, (ax_month, ax_hr) = subplots(1, 2, figsize=(16,8))
+ax_month.plot(x_month, coef_month, marker='o', ms=10)
+ax_month.set_xticks(x_month)
+ax_month.set_xticklabels([l[5] for l in coef_month.index], fontsize=20)
+ax_month.set_xlabel('Month', fontsize=20)
+ax_month.set_ylabel('Coefficient', fontsize=20)
+ax_hr.plot(x_hr, coef_hr, marker='o', ms=10)
+ax_hr.set_xticklabels(range(24)[::2], fontsize=20)
+ax_hr.set_xlabel('Hour', fontsize=20)
+ax_hr.set_ylabel('Coefficient', fontsize=20)
+
+# compare fitted values for linear vs Poisson regression
+fig, ax = subplots(figsize=(8, 8))
+ax.scatter(M2_lm.fittedvalues,
+           M_pois.fittedvalues,
+           s=20)
+ax.set_xlabel('Linear Regression Fit', fontsize=20)
+ax.set_ylabel('Poisson Regression Fit', fontsize=20)
+ax.axline([0,0], c='black', linewidth=3,
+          linestyle='--', slope=1)
+
+
+# %%    ##### Cross-Validation and the Bootstrap #####
+
+# Load data and split into train/test
+Auto = load_data('Auto')
+Auto_train, Auto_valid = train_test_split(Auto,
+                                         test_size=196,
+                                         random_state=0)
+
+# make and fit model to training
+hp_mm = MS(['horsepower'])
+X_train = hp_mm.fit_transform(Auto_train)
+y_train = Auto_train['mpg']
+model = sm.OLS(y_train, X_train)
+results = model.fit()
+
+# fit on test data and get MSE
+X_valid = hp_mm.transform(Auto_valid)
+y_valid = Auto_valid['mpg']
+valid_pred = results.predict(X_valid)
+np.mean((y_valid - valid_pred)**2)
+
+# function for determining MSE
+def evalMSE(terms,
+            response,
+            train,
+            test):
+
+   mm = MS(terms)
+   X_train = mm.fit_transform(train)
+   y_train = train[response]
+
+   X_test = mm.transform(test)
+   y_test = test[response]
+
+   results = sm.OLS(y_train, X_train).fit()
+   test_pred = results.predict(X_test)
+
+   return np.mean((y_test - test_pred)**2)
+
+# try linear, quad, cubic fits
+MSE = np.zeros(3)
+for idx, degree in enumerate(range(1, 4)):
+    MSE[idx] = evalMSE([poly('horsepower', degree)],
+                       'mpg',
+                       Auto_train,
+                       Auto_valid)
+MSE
+
+# retry on different test set
+Auto_train, Auto_valid = train_test_split(Auto,
+                                          test_size=196,
+                                          random_state=3)
+MSE = np.zeros(3)
+for idx, degree in enumerate(range(1, 4)):
+    MSE[idx] = evalMSE([poly('horsepower', degree)],
+                       'mpg',
+                       Auto_train,
+                       Auto_valid)
+MSE
+
+### Cross-validation
+
+# wrapper function from ISLP, also accepts a
+# model_args = {..} parameter for additional params
+hp_model = sklearn_sm(sm.OLS,
+                      MS(['horsepower']))
+X, Y = Auto.drop(columns=['mpg']), Auto['mpg']
+# fit a LOOCV
+cv_results = cross_validate(hp_model,
+                            X,
+                            Y,
+                            cv=Auto.shape[0])
+cv_err = np.mean(cv_results['test_score'])
+cv_err
+
+# fit for polynomial degrees 1 to 5
+cv_error = np.zeros(5)
+H = np.array(Auto['horsepower'])
+M = sklearn_sm(sm.OLS)
+for i, d in enumerate(range(1,6)):
+    X = np.power.outer(H, np.arange(d+1))
+    M_CV = cross_validate(M,
+                          X,
+                          Y,
+                          cv=Auto.shape[0])
+    cv_error[i] = np.mean(M_CV['test_score'])
+cv_error
+
+# example of outer generating numpy arrays
+A = np.array([3, 5, 9])
+B = np.array([2, 4])
+np.add.outer(A, B)
+
+# cv using K folds, k = 10
+cv_error = np.zeros(5)
+cv = KFold(n_splits=10,
+           shuffle=True,
+           random_state=0) # use same splits for each degree
+cv
+for i, d in enumerate(range(1,6)):
+    X = np.power.outer(H, np.arange(d+1))
+    M_CV = cross_validate(M,
+                          X,
+                          Y,
+                          cv=cv)
+    cv_error[i] = np.mean(M_CV['test_score'])
+cv_error
+
+# cross_validate function is flexible and can take other split functions
+# different to KFold since in each iteration of ShuffleSplit, the entire
+# dataset is sampled for a test and training set, versus the fold method
+# which guarantees all test sets in the K folds are mutually exclusive
+validation = ShuffleSplit(n_splits=1,
+                          test_size=196,
+                          random_state=0)
+results = cross_validate(hp_model,
+                         Auto.drop(['mpg'], axis=1),
+                         Auto['mpg'],
+                         cv=validation)
+results['test_score']
+
+# estimate variability in test error
+# note that it's not a valid estimate since 
+# training/test sets overlap with ShuffleSplit method
+validation = ShuffleSplit(n_splits=10,
+                          test_size=196,
+                          random_state=0)
+results = cross_validate(hp_model,
+                         Auto.drop(['mpg'], axis=1),
+                         Auto['mpg'],
+                         cv=validation)
+results
+results['test_score'].mean(), results['test_score'].std()
+
+
+### Bootstrap
+Portfolio = load_data('Portfolio')
+
+# covariance of first 100 observations
+def alpha_func(D, idx):
+   cov_ = np.cov(D[['X','Y']].loc[idx], rowvar=False)
+#    print(cov_)
+   return ((cov_[1,1] - cov_[0,1]) /
+           (cov_[0,0]+cov_[1,1]-2*cov_[0,1]))
+alpha_func(Portfolio, range(100))
+
+# covariance of bootstrapped 100 observations with replacement
+rng = np.random.default_rng(0)
+alpha_func(Portfolio,
+           rng.choice(100,
+                      100,
+                      replace=True))
+
+# generic function to computing the bootstrap standard error for 
+# arbitrary functions that take A WHOLE DATAFRAME as an argument.
+def boot_SE(func,
+            D,
+            n=None,
+            B=1000,
+            seed=0):
+    rng = np.random.default_rng(seed)
+    first_, second_ = 0, 0
+    # how many to sample out of the data index per bootstrap sample
+    n = n or D.shape[0]
+    for _ in range(B):
+        # get index values corresponding to bootstrap sample
+        idx = rng.choice(D.index,
+                         n,
+                         replace=True)
+        # calculate function metric based on data, index values
+        value = func(D, idx)
+        # sum of X and X^2
+        first_ += value
+        second_ += value**2
+    # E(X^2) - E(X)^2 --> variance, sqrt to get se
+    return np.sqrt(second_ / B - (first_ / B)**2)
+
+alpha_SE = boot_SE(alpha_func,
+                   Portfolio,
+                   B=1000,
+                   seed=0)
+# SE(alpha_hat)
+alpha_SE
+
+
+### Estimating accuracy of Linear Regression Model
+
+# define function to get parameters
+def boot_OLS(model_matrix, response, D, idx):
+    D_ = D.loc[idx]
+    Y_ = D_[response]
+    X_ = clone(model_matrix).fit_transform(D_)
+    return sm.OLS(Y_, X_).fit().params
+
+# partially define the function boot_OLS
+hp_func = partial(boot_OLS, MS(['horsepower']), 'mpg')
+hp_func
+Auto
+# test on a few bootstrap samples
+rng = np.random.default_rng(0)
+np.array([hp_func(Auto,
+          rng.choice(Auto.index,
+                     392,
+                     replace=True)) for _ in range(10)])
+
+# apply the hp_func 'partialised' func as arg to boot_SE
+hp_se = boot_SE(hp_func,
+                Auto,
+                B=1000,
+                seed=10)
+# SE(B0) and SE(B1)
+hp_se
+
+# compare bootstrap se estimates versus model se estimates
+# note bootstrap may be more accurate as it does not assume that
+# xi's are fixed unlike the formulas to compute se in the model,
+# so may provide a better estimate of sigma^2
+hp_model.fit(Auto, Auto['mpg'])
+model_se = summarize(hp_model.results_)['std err']
+model_se
+
+
+## quadratic fit boot SE and model SE for parameters
+quad_model = MS([poly('horsepower', 2, raw=True)])
+quad_func = partial(boot_OLS,
+                    quad_model,
+                    'mpg')
+boot_SE(quad_func, Auto, B=1000)
+
+M = sm.OLS(Auto['mpg'],
+           quad_model.fit_transform(Auto))
+summarize(M.fit())['std err']
+
+
+
+
+
+# %%    ##### Linear Models and Regularization Methods #####
+
+# Forward selection
+Hitters = load_data('Hitters')
+np.isnan(Hitters['Salary']).sum()
+Hitters = Hitters.dropna()
+Hitters.shape
+
+# use Cp as a scorer.
+# by default, sklearn tries to maximize a scorer, so
+# compute the negative Cp statistic
+def nCp(sigma2, estimator, X, Y):
+    "Negative Cp statistic"
+    n, p = X.shape
+    Yhat = estimator.predict(X)
+    RSS = np.sum((Y - Yhat)**2)
+    return -(RSS + 2 * p * sigma2) / n
+
+# fit model using all variables, to estimate sigma^2
+design = MS(Hitters.columns.drop('Salary')).fit(Hitters)
+Y = np.array(Hitters['Salary'])
+X = design.transform(Hitters)
+sigma2 = sm.OLS(Y,X).fit().scale
+
+# sklearn_selected() requires only the estimator, X, Y
+# variables of nCp function, so define partial function, this
+# is then used as a scorer for model selection
+neg_Cp = partial(nCp, sigma2)
+# also need to specify a search strategy, the one below is defined
+# in ISLP.models package, which stops adding to model once there is 
+# no improvement in the scoring function provided
+strategy = Stepwise.first_peak(design,
+                               direction='forward',
+                               max_terms=len(design.terms))
+
+strategy
+
+## now fit linear regression using forward selection, which takes
+# a model and a search strategy, if no score is provided, then default MSE
+hitters_MSE = sklearn_selected(sm.OLS,
+                               strategy)
+hitters_MSE.fit(Hitters, Y)
+hitters_MSE.selected_state_
+
+# only select 10 variables with using scoring=neg_CP
+hitters_Cp = sklearn_selected(sm.OLS,
+                               strategy,
+                               scoring=neg_Cp)
+hitters_Cp.fit(Hitters, Y)
+hitters_Cp.selected_state_
+
+#### alternative model selection than Cp: CV/Validation
+strategy = Stepwise.fixed_steps(design,
+                                len(design.terms),
+                                direction='forward')
+full_path = sklearn_selection_path(sm.OLS, strategy)
+full_path.fit(Hitters, Y)
+Yhat_in = full_path.predict(Hitters)
+# training dataset is predicted on each observation (each row) 
+# and also each model (the 20 columns)
+Yhat_in.shape
+
+## plot training MSE for each model with increasing # predictors
+mse_fig, ax = plt.subplots(figsize=(8,8))
+# need to get the shape into (263, 1)
+insample_mse = ((Yhat_in - Y[:,None])**2).mean(0)
+n_steps = insample_mse.shape[0]
+ax.plot(np.arange(n_steps),
+        insample_mse,
+        'k', # color black
+        label='In-sample')
+ax.set_ylabel('MSE',
+              fontsize=20)
+ax.set_xlabel('# steps of forward stepwise',
+              fontsize=20)
+ax.set_xticks(np.arange(n_steps)[::2])
+ax.legend()
+ax.set_ylim([50000,250000])
+
+##### calculate cross-validated predicted values using 5-fold CV
+K = 5
+kfold = skm.KFold(K,
+                  random_state=0,
+                  shuffle=True)
+# each prediction on a row belongs to a 'hold-out' fold and is 
+# predicted from a model trained on one training fold. 
+# this is done per each of the 20 models, giving (n, n_models) shape
+Yhat_cv = skm.cross_val_predict(full_path,
+                                Hitters,
+                                Y,
+                                cv=kfold)
+Yhat_cv.shape
+
+## evaluate CV error per fold, per each of the 20 models, and plot
+cv_mse = []
+# kfold.split(Y) --> length of 5, each correspond to a train/hold out fold tuple indices
+for train_idx, test_idx in kfold.split(Y):
+    # again, require shape of (263, 1) (to match the (263, 20))
+    errors = (Yhat_cv[test_idx] - Y[test_idx,None])**2
+    cv_mse.append(errors.mean(0)) # column means
+cv_mse = np.array(cv_mse).T
+cv_mse.shape
+
+ax.errorbar(np.arange(n_steps), 
+            cv_mse.mean(1),
+            cv_mse.std(1) / np.sqrt(K),
+            label='Cross-validated',
+            c='r') # color red
+ax.set_ylim([50000,250000])
+ax.legend()
+mse_fig
+
+### Implement validation set approach over cv approach, and plot
+validation = skm.ShuffleSplit(n_splits=1, 
+                              test_size=0.2,
+                              random_state=0)
+# list(validation.split(Y))
+for train_idx, test_idx in validation.split(Y):
+    full_path.fit(Hitters.iloc[train_idx],
+                  Y[train_idx])
+    Yhat_val = full_path.predict(Hitters.iloc[test_idx])
+    errors = (Yhat_val - Y[test_idx,None])**2
+    validation_mse = errors.mean(0)
+    
+ax.plot(np.arange(n_steps), 
+    validation_mse,
+    'b--', # color blue, broken line
+    label='Validation')
+ax.set_xticks(np.arange(n_steps)[::2])
+ax.set_ylim([50000,250000])
+ax.legend()
+mse_fig
+
+
+
+
+# %%    ########## RIDGE AND LASSO REGRESSION ############
+
+X = design.transform(Hitters)
+X
+X = X.drop(columns=["intercept"])
+# Xs = X - X.mean(0)[None,:]
+Xs = X - X.mean(0)
+X_scale = X.std(0).replace(0, np.nan)
+# Xs = Xs / X_scale[None,:]
+Xs = Xs.div(X_scale).fillna(0)
+Xs
+lambdas = 10**np.linspace(8, -2, 100) / Y.std()
+lambdas
+# ridge correspond to l1_ratio = 0
+soln_array = skl.ElasticNet.path(Xs,
+                                 Y,
+                                 l1_ratio=0.,
+                                 alphas=lambdas)[1]
+soln_array.shape
+soln_array
+soln_array.T
+
+# plot coefficients as lambda changes
+soln_path = pd.DataFrame(soln_array.T,
+                         columns=Xs.columns,
+                         index=-np.log(lambdas))
+soln_path.index.name = 'negative log(lambda)'
+soln_path
+
+path_fig, ax = plt.subplots(figsize=(8,8))
+soln_path.plot(ax=ax, legend=False)
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Standardized coefficients', fontsize=20)
+ax.legend(loc='upper left')
+
+# 40th lambda, coefficients at 40th lambda
+beta_hat = soln_path.loc[soln_path.index[39]] # soln_path.iloc[39]
+lambdas[39], beta_hat
+# l2 norm
+np.linalg.norm(beta_hat)
+# l2 norm of a much smaller lambda = higher l2 norm
+beta_hat = soln_path.loc[soln_path.index[59]]
+# np.linalg.norm(soln_path.iloc[59])
+lambdas[59], np.linalg.norm(beta_hat)
+
+# Above we normalized X upfront, and fit the ridge model using Xs. 
+# The Pipeline() object in sklearn provides a clear way to separate feature 
+# normalization from the fitting of the ridge model itself.
+ridge = skl.ElasticNet(alpha=lambdas[59], l1_ratio=0)
+scaler = StandardScaler(with_mean=True,  with_std=True)
+pipe = Pipeline(steps=[('scaler', scaler), ('ridge', ridge)])
+pipe.fit(X, Y)
+
+# very close to the one provided by ElasticNet.path
+np.linalg.norm(ridge.coef_)
+
+
+
+
+##### Estimating test error of Ridge
+
+# %%    ##### 3.7 page 136

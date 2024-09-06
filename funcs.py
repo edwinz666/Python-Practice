@@ -43,10 +43,10 @@ def pairs(
     # define visualizations based on variable types and pairs based on
     # a tuple in the form (seaborn visualization function, dict[kwargs])
     # each variable type pair has 2 visualizations, where the
-    # first visualization is for lower triangle/non-square grids, and the
-    # second visualization is for the upper triangle. 
+    # first visualization (_1) is for lower triangle/non-square grids, and the
+    # second visualization (_2) is for the upper triangle. 
     # Where a variable matches with itself, regardless of its position, 
-    # the diag_{numerical, discrete} graphs are plotted instead
+    # the diag_{numerical, categorical} graphs are plotted instead
     
     # numeric against numeric, visualizations #1 and #2
     numerical_numerical_1 = (
@@ -62,32 +62,33 @@ def pairs(
         }
     ),
     
-    # discrete against numeric, visualizations #1 and #2
-    discrete_numerical_1 = (sns.boxplot, {}),
-    discrete_numerical_2 = (sns.violinplot, {}),
+    # categorical against numeric, visualizations #1 and #2
+    categorical_numerical_1 = (sns.boxplot, {}),
+    categorical_numerical_2 = (sns.violinplot, {}),
     
-    # discrete against discrete, visualizations #1, and #2
-    discrete_discrete_1 = (
+    # categorical against categorical, visualizations #1, and #2
+    categorical_categorical_1 = (
         sns.heatmap,
         {
         "annot": True, "fmt": "d"
         }
     ),
-    discrete_discrete_2 = (sns.histplot, {}),
+    categorical_categorical_2 = (sns.histplot, {}),
     
-    # a variable plotted against itself, dependent on discrete or numeric
+    # a variable plotted against itself, dependent on categorical or numeric
     diag_numerical = (sns.histplot, {}),
-    diag_discrete = (sns.countplot, {}),
+    diag_categorical = (sns.countplot, {}),
     
     # kwargs for plt.subplots
     **subplots_kwargs
     ):
     
-    if x_vars is None:
-        x_vars = data.columns
+    ## plot all vars against all vars if not specified
+    # if x_vars is None:
+    #     x_vars = data.columns
 
-    if y_vars is None:
-        y_vars = data.columns
+    # if y_vars is None:
+    #     y_vars = data.columns
     
     # g = sns.PairGrid(data=data, x_vars=x_vars, y_vars=y_vars, **kwargs)
     _, g = plt.subplots(len(y_vars),len(x_vars), **subplots_kwargs)
@@ -101,42 +102,42 @@ def pairs(
             x_dtype = data.dtypes[data.get_column_index(x)]
             y_dtype = data.dtypes[data.get_column_index(y)]
             
-            # assumptions on discrete vs numerical based on polars data type
+            # assumptions on categorical vs numerical based on polars data type
             if x_dtype in [pl.Categorical, pl.Enum, pl.String]:
-                x_dtype = "discrete"
+                x_dtype = "categorical"
             else:
                 x_dtype = "numerical"
                 
             if y_dtype in [pl.Categorical, pl.Enum, pl.String]:
-                y_dtype = "discrete"
+                y_dtype = "categorical"
             else:
                 y_dtype = "numerical"
             
             # visualizations for a variable matched with itself
             if x == y:
                 y = None
-                if x_dtype == "discrete":        
-                    func, func_kwargs = diag_discrete
+                if x_dtype == "categorical":        
+                    func, func_kwargs = diag_categorical
                 else:
                     func, func_kwargs = diag_numerical
                               
             # lower triangle or non-square grid visualization logic
             elif i <= j or len(x_vars) != len(y_vars):
-                if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = discrete_discrete_1
+                if x_dtype == "categorical" and y_dtype == "categorical":
+                    func, func_kwargs = categorical_categorical_1
                 elif x_dtype == "numerical" and y_dtype == "numerical":
                     func, func_kwargs = numerical_numerical_1
                 else:
-                    func, func_kwargs = discrete_numerical_1
+                    func, func_kwargs = categorical_numerical_1
             
             # upper triangle
             else:
-                if x_dtype == "discrete" and y_dtype == "discrete":
-                    func, func_kwargs = discrete_discrete_2                 
+                if x_dtype == "categorical" and y_dtype == "categorical":
+                    func, func_kwargs = categorical_categorical_2                 
                 elif x_dtype == "numerical" and y_dtype == "numerical":
                     func, func_kwargs = numerical_numerical_2
                 else:
-                    func, func_kwargs = discrete_numerical_2
+                    func, func_kwargs = categorical_numerical_2
 
             ### draw the graph on the corresponding axis
             # skip when no function is defined 
@@ -173,8 +174,6 @@ def pairs(
                 ax.set(xlabel=x, ylabel=y)
             else:
                 func(data=data, x=x, y=y, ax=ax, hue=hue, **func_kwargs)
-        
-    plt.show()
 
     return g
 
