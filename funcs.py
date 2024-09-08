@@ -218,6 +218,7 @@ def to_ordered_enum(
 
 # %%    ### Fix for -inf/inf categories from qcut/cut function in polars ###
 def fix_cut(data: pl.DataFrame, colnames, col_mins, col_maxs):
+
     exprs = []
     
     ### For each column, replace -infs/infs with the supplied column mins/maxs

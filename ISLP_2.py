@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, date
 from pandas.tseries.offsets import Hour, Minute, Day, MonthEnd
 from pandas.tseries.frequencies import to_offset
 from scipy.stats import percentileofscore
+import scipy.stats as stats
 
 import xlsxwriter
 
@@ -50,11 +51,26 @@ from sklearn.preprocessing import StandardScaler
 import sklearn.model_selection as skm
 from sklearn.model_selection import train_test_split
 import sklearn.linear_model as skl
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import \
+     (LinearRegression,
+      LogisticRegression,
+      Lasso)
 
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA
 from sklearn.cross_decomposition import PLSRegression
+
+from sklearn.tree import (DecisionTreeClassifier as DTC,
+                          DecisionTreeRegressor as DTR,
+                          plot_tree,
+                          export_text)
+from sklearn.metrics import (accuracy_score,
+                             log_loss)
+from sklearn.ensemble import \
+     (RandomForestRegressor as RF,
+      GradientBoostingRegressor as GBR)
+from sklearn.svm import SVC
+from sklearn.metrics import RocCurveDisplay
 
 import ISLP as islp
 from ISLP import load_data
@@ -71,6 +87,60 @@ from ISLP.models import \
      (Stepwise,
       sklearn_selected,
       sklearn_selection_path)
+
+from pygam import (s as s_gam,
+                   l as l_gam,
+                   f as f_gam,
+                   LinearGAM,
+                   LogisticGAM)
+
+from ISLP.transforms import (BSpline,
+                             NaturalSpline)
+from ISLP.models import bs, ns
+from ISLP.pygam import (approx_lam,
+                        degrees_of_freedom,
+                        plot as plot_gam,
+                        anova as anova_gam)
+
+from ISLP.svm import plot as plot_svm
+
+from ISLP.torch import (SimpleDataModule,
+                        SimpleModule,
+                        ErrorTracker,
+                        rec_num_workers)
+from ISLP.torch.imdb import (load_lookup,
+                             load_tensor,
+                             load_sparse,
+                             load_sequential)
+
+# from ISLP.bart import BART
+
+import torch
+from torch import nn
+from torch.optim import RMSprop
+from torch.utils.data import TensorDataset
+from torchmetrics import (MeanAbsoluteError,
+                          R2Score)
+from torchinfo import summary
+from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning import seed_everything
+seed_everything(0, workers=True)
+torch.use_deterministic_algorithms(True, warn_only=True)
+
+from torchvision.io import read_image
+from torchvision.datasets import MNIST, CIFAR100
+from torchvision.models import (resnet50,
+                                ResNet50_Weights)
+from torchvision.transforms import (Resize,
+                                    Normalize,
+                                    CenterCrop,
+                                    ToTensor)
+from glob import glob
+import json
+
+import torchvision
+
 
 plt.style.use('ggplot')
 ax1 = sns.set_style(style=None, rc=None )
@@ -1602,6 +1672,7 @@ for train_idx, test_idx in kfold.split(Y):
     errors = (Yhat_cv[test_idx] - Y[test_idx,None])**2
     cv_mse.append(errors.mean(0)) # column means
 cv_mse = np.array(cv_mse).T
+# one per model (with increasing # predictors) per fold
 cv_mse.shape
 
 ax.errorbar(np.arange(n_steps), 
@@ -1698,4 +1769,1244 @@ np.linalg.norm(ridge.coef_)
 
 ##### Estimating test error of Ridge
 
+# fix random state of splitter to ensure reproducability
+validation = skm.ShuffleSplit(n_splits=1,
+                              test_size=0.5,
+                              random_state=0)
+
+# test MSE with alpha = 0.01
+ridge.alpha = 0.01
+results = skm.cross_validate(ridge,
+                             X,
+                             Y,
+                             scoring='neg_mean_squared_error',
+                             cv=validation)
+-results['test_score']
+
+# test MSE with alpha = 1e10
+ridge.alpha = 1e10
+results = skm.cross_validate(ridge,
+                             X,
+                             Y,
+                             scoring='neg_mean_squared_error',
+                             cv=validation)
+-results['test_score']
+
+## using validation set approach to choose lambda
+param_grid = {'ridge__alpha': lambdas}
+grid = skm.GridSearchCV(pipe,
+                        param_grid,
+                        cv=validation,
+                        scoring='neg_mean_squared_error')
+grid.fit(X, Y)
+grid.best_params_['ridge__alpha']
+grid.best_estimator_
+
+### using 5-fold CV approach, NOTE definition of kfold
+kfold = skm.KFold(K,
+                  random_state=0,
+                  shuffle=True)
+grid = skm.GridSearchCV(pipe, 
+                        param_grid,
+                        cv=kfold,
+                        scoring='neg_mean_squared_error')
+grid.fit(X, Y)
+grid.best_params_['ridge__alpha']
+grid.best_estimator_
+
+# plot CV-MSE of lambdas
+ridge_fig, ax = plt.subplots(figsize=(8,8))
+# -log(lambda) means graph starts from very high lambda values to low
+# meaning that starts from high bias low var to low bias high var
+ax.errorbar(-np.log(lambdas),
+            -grid.cv_results_['mean_test_score'],
+            yerr=grid.cv_results_['std_test_score'] / np.sqrt(K))
+ax.set_ylim([50000,250000])
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Cross-validated MSE', fontsize=20)
+
+# instead of using 'neg_mean_squared_error' as score, use the default
+# of R^2
+grid_r2 = skm.GridSearchCV(pipe, 
+                           param_grid,
+                           cv=kfold)
+grid_r2.fit(X, Y)
+# 
+grid_r2.cv_results_['mean_test_score']
+grid_r2.cv_results_['std_test_score']
+
+r2_fig, ax = plt.subplots(figsize=(8,8))
+ax.errorbar(-np.log(lambdas),
+            grid_r2.cv_results_['mean_test_score'],
+            # https://www.mdpi.com/2571-905X/4/4/51
+            # this is the standard error in the K-folds MSE
+            yerr=grid_r2.cv_results_['std_test_score'] / np.sqrt(K))
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Cross-validated $R^2$', fontsize=20)
+
+
+
+##### Fast CV for Solution Paths
+# here the normalization done once across data rather than per fold, but 
+# shouild be similar
+ridgeCV = skl.ElasticNetCV(alphas=lambdas, 
+                           l1_ratio=0,
+                           cv=kfold)
+pipeCV = Pipeline(steps=[('scaler', scaler),
+                         ('ridge', ridgeCV)])
+pipeCV.fit(X, Y)
+
+### see CV errors by lambda values
+tuned_ridge = pipeCV.named_steps['ridge']
+# two different ways to get min lambda
+-np.log(tuned_ridge.alpha_)
+-np.log(lambdas[np.argmin(tuned_ridge.mse_path_.mean(axis=1))])
+ridgeCV_fig, ax = plt.subplots(figsize=(8,8))
+ax.errorbar(-np.log(lambdas),
+            tuned_ridge.mse_path_.mean(axis=1),
+            yerr=tuned_ridge.mse_path_.std(axis=1) / np.sqrt(K))
+ax.axvline(-np.log(tuned_ridge.alpha_), c='k', ls='--')
+ax.set_ylim([50000,250000])
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Cross-validated MSE', fontsize=20)
+
+# each row is a lambda, columns are the folds
+tuned_ridge.mse_path_.shape
+# get mean sq-error across folds per each lambda, then take minimum MSE
+np.min(tuned_ridge.mse_path_.mean(axis=1))
+# coefficients of lowest lambda fit
+tuned_ridge.coef_
+
+
+
+######## However, we have used all the data in the CV-fitting of lambda
+# instead, split into training/test fit, and the training is used for fitting
+outer_valid = skm.ShuffleSplit(n_splits=1, 
+                               test_size=0.25,
+                               random_state=1)
+inner_cv = skm.KFold(n_splits=5,
+                     shuffle=True,
+                     random_state=2)
+ridgeCV = skl.ElasticNetCV(alphas=lambdas,
+                           l1_ratio=0,
+                           cv=inner_cv)
+pipeCV = Pipeline(steps=[('scaler', scaler),
+                         ('ridge', ridgeCV)])
+# split, fit and evaluate on test error
+results = skm.cross_validate(pipeCV, 
+                             X,
+                             Y,
+                             cv=outer_valid,
+                             scoring='neg_mean_squared_error')
+-results['test_score']
+
+
+
+########## LASSO Regression
+# note l1_ratio = 1
+lassoCV = skl.ElasticNetCV(n_alphas=100, 
+                           l1_ratio=1,
+                           cv=kfold)
+pipeCV = Pipeline(steps=[('scaler', scaler),
+                         ('lasso', lassoCV)])
+pipeCV.fit(X, Y)
+tuned_lasso = pipeCV.named_steps['lasso']
+tuned_lasso.alpha_
+
+# EQUIVALENT TO skl.ElasticNet.path( ...)[:2]
+lambdas, soln_array = skl.Lasso.path(Xs, 
+                                    Y,
+                                    l1_ratio=1,
+                                    n_alphas=100)[:2]
+
+soln_path = pd.DataFrame(soln_array.T,
+                         columns=Xs.columns,
+                         index=-np.log(lambdas))
+
+# plot paths of coefficients as lambda changes
+path_fig, ax = plt.subplots(figsize=(8,8))
+soln_path.plot(ax=ax, legend=False)
+ax.legend(loc='upper left')
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Standardized coefficiients', fontsize=20)
+
+# lowest CV-MSE
+np.min(tuned_lasso.mse_path_.mean(1))
+
+# plot of CV-error by lambdas
+lassoCV_fig, ax = plt.subplots(figsize=(8,8))
+ax.errorbar(-np.log(tuned_lasso.alphas_),
+            tuned_lasso.mse_path_.mean(1),
+            yerr=tuned_lasso.mse_path_.std(1) / np.sqrt(K))
+ax.axvline(-np.log(tuned_lasso.alpha_), c='k', ls='--')
+ax.set_ylim([50000,250000])
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Cross-validated MSE', fontsize=20)
+
+# coefficients corresponding to lambda with best CV-MSE
+tuned_lasso.coef_
+
+
+
+
+# %%    ########## PCR and PLS regression #############
+# LinearRegression() fits an intercept by default unlike OLS
+pca = PCA(n_components=2)
+linreg = skl.LinearRegression()
+pipe = Pipeline([('pca', pca),
+                 ('linreg', linreg)])
+pipe.fit(X, Y)
+pipe.named_steps['linreg'].coef_
+
+# PCA with standardization of variables - recommended
+pipe = Pipeline([('scaler', scaler), 
+                 ('pca', pca),
+                 ('linreg', linreg)])
+pipe.fit(X, Y)
+pipe.named_steps['linreg'].coef_
+
+# use CV to choose # components
+# note naming of 'pca__n_components' as must adhere to the format:
+# step_name__parameter_name in the pipeline
+param_grid = {'pca__n_components': range(1, 20)}
+grid = skm.GridSearchCV(pipe,
+                        param_grid,
+                        cv=kfold,
+                        scoring='neg_mean_squared_error')
+grid.fit(X, Y)
+
+# plot PCA components against CV-error
+pcr_fig, ax = plt.subplots(figsize=(8,8))
+n_comp = param_grid['pca__n_components']
+ax.errorbar(n_comp,
+            -grid.cv_results_['mean_test_score'],
+            grid.cv_results_['std_test_score'] / np.sqrt(K))
+ax.set_ylabel('Cross-validated MSE', fontsize=20)
+ax.set_xlabel('# principal components', fontsize=20)
+ax.set_xticks(n_comp[::2])
+# ax.set_ylim([50000,250000])
+
+# PCA() method complains if n_components = 0, so fit
+# intercept model manually
+Xn = np.zeros((X.shape[0], 1))
+cv_null = skm.cross_validate(linreg,
+                             Xn,
+                             Y,
+                             cv=kfold,
+                             scoring='neg_mean_squared_error')
+# MSE per fold, then take mean across the MSE of all the folds
+-cv_null['test_score'].mean()
+# % of variance explained by each PCA component
+pipe.named_steps['pca'].explained_variance_ratio_
+
+
+##### Partial Least Squares (PLS)
+pls = PLSRegression(n_components=2, 
+                    scale=True)
+pls.fit(X, Y)
+
+# Use CV to choose # components
+param_grid = {'n_components':range(1, 20)}
+grid = skm.GridSearchCV(pls,
+                        param_grid,
+                        cv=kfold,
+                        scoring='neg_mean_squared_error')
+grid.fit(X, Y)
+
+# Plot CV-MSE by # components
+pls_fig, ax = plt.subplots(figsize=(8,8))
+n_comp = param_grid['n_components']
+ax.errorbar(n_comp,
+            -grid.cv_results_['mean_test_score'],
+            grid.cv_results_['std_test_score'] / np.sqrt(K))
+ax.set_ylabel('Cross-validated MSE', fontsize=20)
+ax.set_xlabel('# principal components', fontsize=20)
+ax.set_xticks(n_comp[::2])
+# ax.set_ylim([50000,250000])
+
+
+
+
+
+
+# %%    ################ NON-LINEAR MODELLING ##################
+
+# Load data
+Wage = load_data('Wage')
+y = Wage['wage']
+age = Wage['age']
+
+###### Polynomial Regression / Step Functions
+poly_age = MS([poly('age', degree=4)]).fit(Wage)
+M = sm.OLS(y, poly_age.transform(Wage)).fit()
+summarize(M)
+
+# create grid of ages for which we want predictions
+age_grid = np.linspace(age.min(),
+                       age.max(),
+                       100)
+age_df = pd.DataFrame({'age': age_grid})
+
+# define function to visualize several model specs
+def plot_wage_fit(age_df, 
+                  basis,
+                  title):
+
+    X = basis.transform(Wage)
+    Xnew = basis.transform(age_df)
+    M = sm.OLS(y, X).fit()
+    preds = M.get_prediction(Xnew)
+    bands = preds.conf_int(alpha=0.05)
+    fig, ax = plt.subplots(figsize=(8,8))
+    ax.scatter(age,
+               y,
+               facecolor='gray',
+               alpha=0.5)
+    for val, ls in zip([preds.predicted_mean,
+                      bands[:,0],
+                      bands[:,1]],
+                     ['b','r--','r--']):
+        ax.plot(age_df.values, val, ls, linewidth=3)
+    ax.set_title(title, fontsize=20)
+    ax.set_xlabel('Age', fontsize=20)
+    ax.set_ylabel('Wage', fontsize=20)
+    return ax
+
+plot_wage_fit(age_df, 
+              poly_age,
+              'Degree-4 Polynomial')
+
+# selection of polynomial degree based on ANOVA
+# NOTE that ANOVA works for non-orthogonal polynomials
+# summarize(M) also works here since orthogonal poly's
+models = [MS([poly('age', degree=d)]) 
+          for d in range(1, 6)]
+Xs = [model.fit_transform(Wage) for model in models]
+anova_lm(*[sm.OLS(y, X_).fit()
+           for X_ in Xs])
+summarize(M)
+
+models = [MS(['education', poly('age', degree=d)])
+          for d in range(1, 4)]
+XEs = [model.fit_transform(Wage)
+       for model in models]
+anova_lm(*[sm.OLS(y, X_).fit() for X_ in XEs])
+# alternative is using CV to choose degree of polynomial ...
+
+
+### predicting whether individual earns > $250k/yr
+X = poly_age.transform(Wage)
+high_earn = Wage['high_earn'] = y > 250 # shorthand
+glm = sm.GLM(y > 250,
+             X,
+             family=sm.families.Binomial())
+B = glm.fit()
+summarize(B)
+
+newX = poly_age.transform(age_df)
+newX
+age_df.iloc[60]
+B.predict(newX, which="linear").iloc[60]
+preds = B.get_prediction(newX)
+bands = preds.conf_int(alpha=0.05)
+
+# plot estimated relationship
+fig, ax = plt.subplots(figsize=(8,8))
+rng = np.random.default_rng(0)
+ax.scatter(age +
+           0.2 * rng.uniform(size=y.shape[0]),
+           np.where(high_earn, 0.198, 0.002),
+           fc='gray',
+           marker='|')
+for val, ls in zip([preds.predicted_mean,
+                  bands[:,0],
+                  bands[:,1]],
+                 ['b','r--','r--']):
+    ax.plot(age_df.values, val, ls, linewidth=3)
+ax.set_title('Degree-4 Polynomial', fontsize=20)
+ax.set_xlabel('Age', fontsize=20)
+ax.set_ylim([0,0.2])
+ax.set_ylabel('P(Wage > 250)', fontsize=20)
+
+# replicate calculation of upper bound
+se = np.sqrt(
+    np.diag(
+        np.dot(newX, 
+               np.dot(B.cov_params(), 
+                      newX.T))))
+quantile_975 = stats.norm.ppf(0.975)
+upper_bound = B.predict(newX, which="linear") + quantile_975* se
+upper_bound_prob = 1 / (1 + np.exp(-upper_bound))
+upper_bound_prob
+bands[:,1]
+
+### fit step function on categorical
+# no perfect collinearity here even with all 4, since
+# there is no intercept term in model?
+cut_age = pd.qcut(age, 4)
+cut_age
+pd.get_dummies(cut_age)
+summarize(sm.OLS(y, pd.get_dummies(cut_age)).fit())
+
+#### Splines
+# actual spine evaluation functions in scipy.interpolate,
+# currently wrapped them as transforms in ISLP
+
+# BSpline generates entire matrix of basis functions,
+# default cubic splines, use degree= to change
+# number of parameters expected = #knots + degree + 1
+bs_ = BSpline(internal_knots=[25,40,60], intercept=True).fit(age)
+bs_age = bs_.transform(age)
+bs_age
+bs_age.shape
+
+# use name= to change output name of variables
+bs_age = MS([bs('age', internal_knots=[25,40,60]
+                , name='bs(age)')])
+Xbs = bs_age.fit_transform(Wage)
+M = sm.OLS(y, Xbs).fit()
+summarize(M)
+
+# df=6 here correspond to 3 knots,
+# this function chooses knots at uniform quantiles
+BSpline(df=6).fit(age).internal_knots_
+
+# degree=0 --> piecewise constants,
+# df=3 when degree=0 --> 3 knots
+# VERY SIMILAR to qcut results above, but different
+# inequality logic for bins lead to slightly different results
+bs_age0 = MS([bs('age',
+                 df=3, 
+                 degree=0)]).fit(Wage)
+Xbs0 = bs_age0.transform(Wage)
+summarize(sm.OLS(y, Xbs0).fit())
+
+### fit natural spline with 5 df and no intercept
+# difference between B-splines (efficient regression splines)
+# versus Natural splines: Natural has linear boundary constraints
+ns_age = MS([ns('age', df=5)]).fit(Wage)
+M_ns = sm.OLS(y, ns_age.transform(Wage)).fit()
+summarize(M_ns)
+
+# plot natural spline fit
+plot_wage_fit(age_df,
+              ns_age,
+              'Natural spline, df=5')
+
+
+##### Smoothing Splines and GAMs
+# A smoothing spline is a special case of a GAM with 
+# squared-error loss and a single feature
+
+#### Smoothing operations...
+# s=smoothing spline
+# l=linear
+# f=factor/categorical
+
+#.reshape((-1,1)) --> doesnt seem to be needed
+# np.asarray(age) also doesn't seem to be needed
+X_age = age
+# 0 means smoother applies to first column of a
+# feature matrix, lam is the penalty parameter for non-smoothness
+gam = LinearGAM(s_gam(0, lam=0.6))
+gam.fit(X_age, y)
+
+# investigate how fit changes with lam
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(age, y, facecolor='gray', alpha=0.5)
+for lam in np.logspace(-2, 6, 5):
+    gam = LinearGAM(s_gam(0, lam=lam)).fit(X_age, y)
+    ax.plot(age_grid,
+            gam.predict(age_grid),
+            label='{:.1e}'.format(lam),
+            linewidth=3)
+ax.set_xlabel('Age', fontsize=20)
+ax.set_ylabel('Wage', fontsize=20)
+ax.legend(title='$\lambda$')
+
+# let pygam package/algorithm find optimal lam parameter
+gam_opt = gam.gridsearch(X_age, y)
+gam_opt.predict(age_grid)
+gam_opt.lam
+# pl.DataFrame(dir(gam_opt)).filter(pl.all().str.starts_with("_").not_())
+ax.plot(age_grid,
+        gam_opt.predict(age_grid),
+        label='Grid search',
+        linewidth=4)
+ax.legend()
+fig
+
+### alternatively, fix df using ISLP.pygam
+# below finds lam that gives us ~4 df, noting that
+# the 4 df includes the 2 unpenalized intercept/linear terms
+age_term = gam.terms[0]
+# smooth term associated with age in your GAM.
+age_term
+# approx_lam is estimating a smoothing parameter (lam_4) 
+# for this term.
+lam_4 = approx_lam(np.asarray(X_age).reshape(-1,1), 
+                   age_term, 4)
+age_term.lam = lam_4
+# calculate how many effective degrees of freedom are
+# associated with this smooth term given the estimated smoothing parameter.
+degrees_of_freedom(X_age, age_term)
+
+### vary df similar to an above plot, choose df as desired
+# df+1 to account for smoothing splines always having intercept term
+# df=1 in the loop means we want a linear fit
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(X_age,
+           y,
+           facecolor='gray',
+           alpha=0.3)
+for df in [1,3,4,8,15]:
+    lam = approx_lam(X_age, age_term, df+1)
+    age_term.lam = lam
+    gam.fit(X_age, y)
+    ax.plot(age_grid,
+            gam.predict(age_grid),
+            label='{:d}'.format(df),
+            linewidth=4)
+ax.set_xlabel('Age', fontsize=20)
+ax.set_ylabel('Wage', fontsize=20)
+ax.legend(title='Degrees of freedom')
+
+
+
+##### Additive Models with Several Terms
+
+# Build model matrix in manual fashion, 
+# lets us construct partial dependence plots more easily
+ns_age = NaturalSpline(df=4).fit(age)
+ns_year = NaturalSpline(df=5).fit(Wage['year'])
+Xs = [ns_age.transform(age),
+      ns_year.transform(Wage['year']),
+      # note excludes intercept, includes all cat levels
+      pd.get_dummies(Wage['education']).values]
+X_bh = np.hstack(Xs)
+gam_bh = sm.OLS(y, X_bh).fit()
+
+### Partial dependence plot - Age vs Wage 
+# create range of age values to predict
+age_grid = np.linspace(age.min(),
+                       age.max(),
+                       100)
+# first 100 rows of X_bh to match dim of age_grid
+X_age_bh = X_bh.copy()[:100]
+X_age_bh
+# set each feature to mean of each feature
+X_age_bh[:] = X_bh[:].mean(0)[None,:]
+X_age_bh[:,:4]
+X_age_bh.shape
+# replace just the first four columns representing age 
+# with the natural spline basis computed at the values in age_grid
+X_age_bh[:,:4] = ns_age.transform(age_grid)
+X_age_bh.shape
+# plot
+preds = gam_bh.get_prediction(X_age_bh)
+bounds_age = preds.conf_int(alpha=0.05)
+partial_age = preds.predicted_mean
+center = partial_age.mean()
+partial_age -= center
+bounds_age -= center
+fig, ax = plt.subplots(figsize=(8,8))
+ax.plot(age_grid, partial_age, 'b', linewidth=3)
+ax.plot(age_grid, bounds_age[:,0], 'r--', linewidth=3)
+ax.plot(age_grid, bounds_age[:,1], 'r--', linewidth=3)
+ax.set_xlabel('Age')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of age on wage', fontsize=20)
+
+### Partial dependence plot for year vs wage
+year_grid = np.linspace(2003, 2009, 100)
+year_grid = np.linspace(Wage['year'].min(),
+                        Wage['year'].max(),
+                        100)
+X_year_bh = X_bh.copy()[:100]
+X_year_bh[:] = X_bh[:].mean(0)[None,:]
+X_year_bh[:,4:9] = ns_year.transform(year_grid)
+preds = gam_bh.get_prediction(X_year_bh)
+bounds_year = preds.conf_int(alpha=0.05)
+partial_year = preds.predicted_mean
+center = partial_year.mean()
+partial_year -= center
+bounds_year -= center
+fig, ax = plt.subplots(figsize=(8,8))
+ax.plot(year_grid, partial_year, 'b', linewidth=3)
+ax.plot(year_grid, bounds_year[:,0], 'r--', linewidth=3)
+ax.plot(year_grid, bounds_year[:,1], 'r--', linewidth=3)
+ax.set_xlabel('Year')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of year on wage', fontsize=20)
+
+
+
+# fit model using smoothing splines over natural splines
+# require matrices when using pygam, must use cat.codes below
+
+# default lam=0.6 (arbitrary)
+gam_full = LinearGAM(s_gam(0) +
+                     # more n_splines = more flexibility but more variance
+                     s_gam(1, n_splines=7) +
+                     # lam=0 for no shrinkage
+                     f_gam(2, lam=0))
+Xgam = np.column_stack([age,
+                        Wage['year'],
+                        Wage['education'].cat.codes])
+gam_full = gam_full.fit(Xgam, y)
+
+# plot partial dependence of age on wage using lam=0.6
+fig, ax = plt.subplots(figsize=(8,8))
+# a function is now defined in contrasts to previously verbose section
+plot_gam(gam_full, 0, ax=ax)
+ax.set_xlabel('Age')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of age on wage - default lam=0.6', fontsize=20)
+
+# perhaps more natural to specify df (to get lam) over lam:
+# refit using 4 df (+1 is for intercept)
+age_term = gam_full.terms[0]
+# updating age_term.lam also updates it in gam_full.terms[0]
+age_term.lam = approx_lam(Xgam, age_term, df=4+1)
+year_term = gam_full.terms[1]
+# also updated for gam_full
+year_term.lam = approx_lam(Xgam, year_term, df=4+1)
+gam_full = gam_full.fit(Xgam, y)
+
+# refit partial dependence plot for age --> much smoother
+fig, ax = plt.subplots(figsize=(8,8))
+# a function is now defined in contrasts to previously verbose section
+plot_gam(gam_full, 0, ax=ax)
+ax.set_xlabel('Age')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of age on wage - default lam=0.6', fontsize=20)
+
+
+# partial dependence for year using df specification over lam
+fig, ax = plt.subplots(figsize=(8,8))
+plot_gam(gam_full,
+         1,
+         ax=ax)
+ax.set_xlabel('Year')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of year on wage', fontsize=20)
+
+# partial dependence for education vs Wage
+fig, ax = subplots(figsize=(8, 8))
+ax = plot_gam(gam_full, 2)
+ax.set_xlabel('Education')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of wage on education',
+             fontsize=20)
+ax.set_xticklabels(Wage['education'].cat.categories, fontsize=8)
+
+
+
+### ANOVA Tests for GAMs
+# ANOVA test for year --> exclude, linear, or spline function?
+# NOTE use of 'age_term' since we set the lam earlier based on df
+gam_0 = LinearGAM(age_term + f_gam(2, lam=0))
+gam_0.fit(Xgam, y)
+gam_linear = LinearGAM(age_term +
+                       l_gam(1, lam=0) +
+                       f_gam(2, lam=0))
+gam_linear.fit(Xgam, y)
+anova_gam(gam_0, gam_linear, gam_full)
+
+# ANOVA test for age --> see that non-linear term for age required
+gam_0 = LinearGAM(year_term +
+                  f_gam(2, lam=0))
+gam_linear = LinearGAM(l_gam(0, lam=0) +
+                       year_term +
+                       f_gam(2, lam=0))
+gam_0.fit(Xgam, y)
+gam_linear.fit(Xgam, y)
+anova_gam(gam_0, gam_linear, gam_full)
+
+gam_full.summary()
+
+## Make predictions on training set
+Yhat = gam_full.predict(Xgam)
+
+## Fit logistic regression using GAM, using pygam
+gam_logit = LogisticGAM(age_term + 
+                        l_gam(1, lam=0) +
+                        f_gam(2, lam=0))
+gam_logit.fit(Xgam, high_earn)
+
+# plot partial dependence of logistic regression
+fig, ax = plt.subplots(figsize=(8, 8))
+ax = plot_gam(gam_logit, 2)
+ax.set_xlabel('Education')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of wage on education',
+             fontsize=20)
+ax.set_xticklabels(Wage['education'].cat.categories, fontsize=8)
+
+# No high earners in first category --> misleading/wrong graph
+pd.crosstab(Wage['high_earn'], Wage['education'])
+
+# the '-1' included due to bug in pygam, just relabels education values
+only_hs = Wage['education'] == '1. < HS Grad'
+Wage_ = Wage.loc[~only_hs]
+Xgam_ = np.column_stack([Wage_['age'],
+                         Wage_['year'],
+                         Wage_['education'].cat.codes-1])
+high_earn_ = Wage_['high_earn']
+
+# fit the model again
+gam_logit_ = LogisticGAM(age_term +
+                         year_term +
+                         f_gam(2, lam=0))
+gam_logit_.fit(Xgam_, high_earn_)
+
+# partial dependence plot of education on higher earner status
+fig, ax = plt.subplots(figsize=(8, 8))
+ax = plot_gam(gam_logit_, 2)
+ax.set_xlabel('Education')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of high earner status on education', fontsize=20);
+ax.set_xticklabels(Wage['education'].cat.categories[1:],
+                   fontsize=8)
+
+# partial - year vs high earn status
+fig, ax = plt.subplots(figsize=(8, 8))
+ax = plot_gam(gam_logit_, 1)
+ax.set_xlabel('Year')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of high earner status on year',
+             fontsize=20)
+
+# partial - age vs high earn status
+fig, ax = plt.subplots(figsize=(8, 8))
+ax = plot_gam(gam_logit_, 0)
+ax.set_xlabel('Age')
+ax.set_ylabel('Effect on wage')
+ax.set_title('Partial dependence of high earner status on age', fontsize=20)
+
+### Local Regression
+lowess = sm.nonparametric.lowess
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(age, y, facecolor='gray', alpha=0.5)
+for span in [0.2, 0.5]:
+    fitted = lowess(y,
+                    age,
+                    frac=span,
+                    xvals=age_grid)
+    ax.plot(age_grid,
+            fitted,
+            label='{:.1f}'.format(span),
+            linewidth=4)
+ax.set_xlabel('Age', fontsize=20)
+ax.set_ylabel('Wage', fontsize=20)
+ax.legend(title='span', fontsize=15)
+
+
+
+
+# %%        ######### TREE-BASED METHODS ##########
+
+### Classification Trees
+
+# data prep - response
+Carseats = load_data('Carseats')
+High = np.where(Carseats.Sales > 8,
+                "Yes",
+                "No")
+
+# include all in the X model spec except response-related Sales
+model = MS(Carseats.columns.drop('Sales'), intercept=False)
+D = model.fit_transform(Carseats)
+feature_names = list(D.columns)
+X = np.asarray(D)
+
+# there is an additional option 'min_samples_split',
+# equal to min # of obs in node to be eligible to split
+# criterion = Gini also possible
+clf = DTC(criterion='entropy',
+          max_depth=3,
+          random_state=0)        
+clf.fit(X, High)
+
+# accuracy, or 1 - training error rate
+accuracy_score(High, clf.predict(X))
+
+# smaller deviance indicates tree provides good fit to training data
+# close related to entropy
+resid_dev = np.sum(log_loss(High, clf.predict_proba(X)))
+resid_dev
+
+# plot and print tree
+ax = plt.subplots(figsize=(12,12))[1]
+plot_tree(clf,
+          feature_names=feature_names,
+          ax=ax)
+
+print(export_text(clf,
+                  feature_names=feature_names,
+                  show_weights=True))
+
+# train on training data, score on test data
+validation = skm.ShuffleSplit(n_splits=1,
+                              test_size=200,
+                              random_state=0)
+results = skm.cross_validate(clf,
+                             D,
+                             High,
+                             cv=validation)
+results['test_score']
+
+
+
+#### Pruning investigations --> better fit?
+
+# split into train and test first
+(X_train,
+ X_test,
+ High_train,
+ High_test) = skm.train_test_split(X,
+                                   High,
+                                   test_size=0.5,
+                                   random_state=0)
+
+# fit tree on full training set, no max_depth as CV will inform
+clf = DTC(criterion='entropy', random_state=0)
+clf.fit(X_train, High_train)
+accuracy_score(High_test, clf.predict(X_test))
+
+# Extract cost complexity values using function
+ccp_path = clf.cost_complexity_pruning_path(X_train, High_train)
+kfold = skm.KFold(10,
+                  random_state=1,
+                  shuffle=True)
+
+# yield set of impurities/alpha --> can extract optimal using CV
+grid = skm.GridSearchCV(clf,
+                        {'ccp_alpha': ccp_path.ccp_alphas},
+                        # refit model using optimal ccp_alpha?
+                        refit=True,
+                        cv=kfold,
+                        scoring='accuracy')
+
+grid.fit(X_train, High_train)
+grid.best_score_
+grid.best_estimator_
+
+# look at pruned tree
+ax = plt.subplots(figsize=(12, 12))[1]
+best_ = grid.best_estimator_
+plot_tree(best_,
+          feature_names=feature_names,
+          ax=ax)
+
+# leaves  
+best_.tree_.n_leaves
+
+# accuracy and confusion matrix
+print(accuracy_score(High_test,
+                     best_.predict(X_test)))
+confusion = confusion_table(best_.predict(X_test),
+                            High_test)
+confusion
+
+
+
+####### Fitting Regression Trees #####
+Boston = load_data("Boston")
+model = MS(Boston.columns.drop('medv'), intercept=False)
+D = model.fit_transform(Boston)
+feature_names = list(D.columns)
+X = np.asarray(D)
+
+## train test split - test gets 30%
+(X_train,
+ X_test,
+ y_train,
+ y_test) = skm.train_test_split(X,
+                                Boston['medv'],
+                                test_size=0.3,
+                                random_state=0)
+
+## fit tree and plot
+reg = DTR(max_depth=3)
+reg.fit(X_train, y_train)
+np.mean((y_test - reg.predict(X_test))**2)
+
+ax = plt.subplots(figsize=(12,12))[1]
+plot_tree(reg,
+          feature_names=feature_names,
+          ax=ax)
+
+# see if CV pruning will improve performance
+ccp_path = reg.cost_complexity_pruning_path(X_train, y_train)
+kfold = skm.KFold(5,
+                  shuffle=True,
+                  random_state=10)
+grid = skm.GridSearchCV(reg,
+                        {'ccp_alpha': ccp_path.ccp_alphas},
+                        refit=True,
+                        cv=kfold,
+                        scoring='neg_mean_squared_error')
+G = grid.fit(X_train, y_train)
+
+# model fitted on the best alpha, and the MSE
+best_ = grid.best_estimator_
+np.mean((y_test - best_.predict(X_test))**2)
+
+# plot best pruned tree
+ax = plt.subplots(figsize=(12,12))[1]
+plot_tree(G.best_estimator_,
+          feature_names=feature_names,
+          ax=ax)
+
+
+#### Bagging and Random Forest #####
+
+## Bagging - m = p special case of RF
+bag_boston = RF(max_features=X_train.shape[1], 
+                random_state=0)
+bag_boston.fit(X_train, y_train)
+
+ax = plt.subplots(figsize=(8,8))[1]
+y_hat_bag = bag_boston.predict(X_test)
+#   standardized residuals
+# ax.scatter(y_hat_bag, (y_hat_bag - y_test)/
+#            (y_hat_bag - y_test).std(ddof=1))
+ax.scatter(y_hat_bag, y_test)
+x = np.linspace(*ax.get_xlim(), 400)
+ax.plot(x, x, label=f'y = x', color='blue')
+np.mean((y_test - y_hat_bag)**2)
+
+# change n_estimators (#trees) from default of 100
+bag_boston = RF(max_features=X_train.shape[1],
+                n_estimators=500,
+                random_state=0).fit(X_train, y_train)
+y_hat_bag = bag_boston.predict(X_test)
+np.mean((y_test - y_hat_bag)**2)
+
+
+#### Random Forest
+RF_boston = RF(max_features=6,
+               random_state=0).fit(X_train, y_train)
+y_hat_RF = RF_boston.predict(X_test)
+np.mean((y_test - y_hat_RF)**2)
+
+# feature importance
+feature_imp = pd.DataFrame(
+    {'importance':RF_boston.feature_importances_},
+    index=feature_names)
+feature_imp.sort_values(by='importance', ascending=False).plot()
+
+#### Boosting
+# want 5000 trees with max_depth of 3 each
+boost_boston = GBR(n_estimators=5000,
+                   learning_rate=0.001,
+                   max_depth=3,
+                   random_state=0)
+boost_boston.fit(X_train, y_train)
+# see how training error decreases as more boosting trees added
+boost_boston.train_score_
+
+# get how test error decreases as more boosting trees added
+test_error = np.zeros_like(boost_boston.train_score_)
+for idx, y_ in enumerate(boost_boston.staged_predict(X_test)):
+   test_error[idx] = np.mean((y_test - y_)**2)
+
+# plot the progression of training/test error as boosting trees added
+plot_idx = np.arange(boost_boston.train_score_.shape[0])
+ax = plt.subplots(figsize=(8,8))[1]
+ax.plot(plot_idx,
+        boost_boston.train_score_,
+        'b',
+        label='Training')
+ax.plot(plot_idx,
+        test_error,
+        'r',
+        label='Test')
+ax.legend()
+
+# predict on test set
+y_hat_boost = boost_boston.predict(X_test)
+np.mean((y_test - y_hat_boost)**2)
+
+
+
+
+
+
+
+# %%    ######### Support Vector Machines ##########
+
+# generate some observations
+rng = np.random.default_rng(1)
+X = rng.standard_normal((50, 2))
+y = np.array([-1]*25+[1]*25)
+X[y==1] += 1
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(X[:,0],
+           X[:,1],
+           c=y,
+           cmap=plt.cm.coolwarm)
+
+# C is penalty for margin violations
+# large C --> narrow margins
+# fit the Support Vector Classifier
+svm_linear = SVC(C=10, kernel='linear')
+svm_linear.fit(X, y)
+
+# visualize margins
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X,
+         y,
+         svm_linear,
+         ax=ax)
+
+# visualize margins using smaller cost of margin violations
+svm_linear_small = SVC(C=0.1, kernel='linear')
+svm_linear_small.fit(X, y)
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X,
+         y,
+         svm_linear_small,
+         ax=ax)
+
+# extract coefficients of linear boundary (linear only)
+svm_linear.coef_
+
+
+# SVM is an estimator in sklearn --> can tune via following method
+kfold = skm.KFold(5, 
+                  random_state=0,
+                  shuffle=True)
+grid = skm.GridSearchCV(svm_linear,
+                        {'C':[0.001,0.01,0.1,1,5,10,100]},
+                        refit=True,
+                        cv=kfold,
+                        scoring='accuracy')
+grid.fit(X, y)
+grid.best_params_
+
+# extract CV score for each 'C' in grid
+# C = 1 is best (lowest out of the best)
+grid.cv_results_[('mean_test_score')]
+
+# predict class on new data - use .best_estimator_
+X_test = rng.standard_normal((20, 2))
+y_test = np.array([-1]*10+[1]*10)
+X_test[y_test==1] += 1
+
+best_ = grid.best_estimator_
+y_test_hat = best_.predict(X_test)
+confusion_table(y_test_hat, y_test)
+
+# use C=0.001 instead to classify new obs?
+svm_ = SVC(C=0.001,
+           kernel='linear').fit(X, y)
+y_test_hat = svm_.predict(X_test)
+confusion_table(y_test_hat, y_test)
+
+# predict on linearly separable data?
+X[y==1] += 1.9
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(X[:,0], X[:,1], c=y, cmap=plt.cm.coolwarm)
+
+# using large C
+svm_ = SVC(C=1e5, kernel='linear').fit(X, y)
+y_hat = svm_.predict(X)
+confusion_table(y_hat, y)
+
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X,
+         y,
+         svm_,
+         ax=ax)
+
+# using small C
+svm_ = SVC(C=0.1, kernel='linear').fit(X, y)
+y_hat = svm_.predict(X)
+confusion_table(y_hat, y)
+
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X,
+         y,
+         svm_,
+         ax=ax)
+
+############ Support Vector Machines ###########
+# non-linear kernels
+
+# generate non-linear boundary data
+X = rng.standard_normal((200, 2))
+X[:100] += 2
+X[100:150] -= 2
+y = np.array([1]*150+[2]*50)
+
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(X[:,0],
+           X[:,1],
+           c=y,
+           cmap=plt.cm.coolwarm)
+
+
+# fit using radial kernal, gamma = 1, C = 1
+(X_train, 
+ X_test,
+ y_train,
+ y_test) = skm.train_test_split(X,
+                                y,
+                                test_size=0.5,
+                                random_state=0)
+svm_rbf = SVC(kernel="rbf", gamma=1, C=1)
+svm_rbf.fit(X_train, y_train)
+
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X_train,
+         y_train,
+         svm_rbf,
+         ax=ax)
+
+# higher C reduces training error, but may overfit
+svm_rbf = SVC(kernel="rbf", gamma=1, C=1e5, probability=True)
+svm_rbf.fit(X_train, y_train)
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X_train,
+         y_train,
+         svm_rbf,
+         ax=ax)
+
+# use CV to choose C and gamma params for the radial kernel
+kfold = skm.KFold(5, 
+                  random_state=0,
+                  shuffle=True)
+grid = skm.GridSearchCV(svm_rbf,
+                        {'C':[0.1,1,10,100,1000],
+                         'gamma':[0.5,1,2,3,4]},
+                        refit=True,
+                        cv=kfold,
+                        scoring='accuracy');
+grid.fit(X_train, y_train)
+grid.best_params_
+
+best_svm = grid.best_estimator_
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X_train,
+         y_train,
+         best_svm,
+         ax=ax)
+
+y_hat_test = best_svm.predict(X_test)
+confusion_table(y_hat_test, y_test)
+
+
+### ROC Curves
+roc_curve = RocCurveDisplay.from_estimator # shorthand
+fig, ax = plt.subplots(figsize=(8,8))
+# takes fitted estimator, X matrix and Y labels as args
+roc_curve(best_svm,
+          X_train,
+          y_train,
+          name='Training',
+          color='r',
+          ax=ax)
+
+roc_curve(best_svm,
+          X_test,
+          y_test,
+          name='Training',
+          color='b',
+          ax=ax)
+
+from sklearn.metrics import roc_auc_score
+# get predicted probabilities for test set
+# note that order is determined lexicographically?
+# e.g. labels 1 and 2 would get cast to 0 and 1?
+y_prob = best_svm.predict_proba(X_test)[:, 1]
+# Compute AUC
+auc = roc_auc_score(y_test, y_prob)
+print(f'AUC: {auc:.2f}')
+
+
+
+###### SVM with multiple classes #####
+## generate third class of observations
+rng = np.random.default_rng(123)
+X = np.vstack([X, rng.standard_normal((50, 2))])
+y = np.hstack([y, [0]*50])
+X[y==0,1] += 2
+fig, ax = plt.subplots(figsize=(8,8))
+ax.scatter(X[:,0], X[:,1], c=y, cmap=plt.cm.coolwarm)
+
+## fit SVM
+# ovo - one-versus-one --> fit K(K+1)/2 SVMs, class i,j
+#       works by tallying #times test obs assigned to a class
+# ovr - one-versus-rest --> fit K SVMs (one per class, all others is the other category)
+#       the Class SVM with highest probability (or score) assigned
+svm_rbf_3 = SVC(kernel="rbf",
+                C=10,
+                gamma=1,
+                decision_function_shape='ovo')
+svm_rbf_3.fit(X, y)
+fig, ax = plt.subplots(figsize=(8,8))
+plot_svm(X,
+         y,
+         svm_rbf_3,
+         scatter_cmap=plt.cm.tab10,
+         ax=ax)
+
+
+## Application to Gene Expression Data
+Khan = load_data('Khan')
+Khan['xtrain'].shape, Khan['xtest'].shape
+
+# fit linear kernel, very large p so flexibility unnecessary
+khan_linear = SVC(kernel='linear', C=10)
+khan_linear.fit(Khan['xtrain'], Khan['ytrain'])
+confusion_table(khan_linear.predict(Khan['xtrain']),
+                Khan['ytrain'])
+
+confusion_table(khan_linear.predict(Khan['xtest']),
+                Khan['ytest'])
+
+
+
+
+
+
+# %%    ############### DEEP LEARNING #################
+# https://pytorch.org/tutorials/beginner/basics/intro.html
+# https://www.kaggle.com/code/ddayanavincent/machine-learning-using-polars
+
+
+##### Single Layer Network on Hitters data #####
+Hitters = load_data('Hitters').dropna()
+n = Hitters.shape[0]
+
+# model matrix and response
+model = MS(Hitters.columns.drop('Salary'), intercept=False)
+X = model.fit_transform(Hitters).to_numpy()
+Y = Hitters['Salary'].to_numpy()
+
+# train test split
+(X_train, 
+ X_test,
+ Y_train,
+ Y_test) = train_test_split(X,
+                            Y,
+                            test_size=1/3,
+                            random_state=1)
+ 
+# linear models (to compare with NN)
+hit_lm = LinearRegression().fit(X_train, Y_train)
+Yhat_test = hit_lm.predict(X_test)
+np.abs(Yhat_test - Y_test).mean()
 # %%    ##### 3.7 page 136
+
+# %%
+import torch
+
+print(f'CUDA version: {torch.version.cuda}')
+cuda_id = torch.cuda.current_device()
+print(f"ID of current CUDA device:{torch.cuda.current_device()}")
+print(f"Name of current CUDA device:{torch.cuda.get_device_name(cuda_id)}")
+print(f'Torch version: {torch.__version__}')
+# %%
